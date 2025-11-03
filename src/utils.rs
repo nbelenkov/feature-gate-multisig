@@ -1,5 +1,5 @@
 use crate::constants::*;
-use crate::feature_gate_program::{activate_feature_funded, create_feature_activation};
+use crate::feature_gate_program::activate_feature_funded;
 use crate::provision::create_rpc_client;
 use crate::squads::{get_vault_pda, CompiledInstruction, Member, Permissions, TransactionMessage};
 use colored::*;
@@ -387,6 +387,96 @@ pub fn display_final_configuration(
     println!();
 }
 
+/// Build a TransactionMessage for a parent multisig to approve a child's proposal.
+/// This creates a single instruction that calls Squads `ApproveProposal` on the child multisig,
+/// with `member_pubkey` set to the parent multisig address. The resulting TransactionMessage can
+/// be embedded into a parent multisig transaction using `create_transaction_and_proposal_message`.
+pub fn create_child_vote_approve_transaction_message(
+    child_multisig: Pubkey,
+    child_tx_index: u64,
+    parent_member_pubkey: Pubkey,
+) -> TransactionMessage {
+    use crate::squads::{
+        get_proposal_pda, MultisigApproveProposalData, MultisigVoteOnProposalAccounts,
+        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+    };
+    use solana_instruction::Instruction;
+
+    // Derive child's proposal PDA
+    let (proposal_pda, _bump) = get_proposal_pda(
+        &child_multisig,
+        child_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+
+    // Construct the vote (approve) instruction for the child multisig
+    let accounts = MultisigVoteOnProposalAccounts {
+        multisig: child_multisig,
+        member: parent_member_pubkey,
+        proposal: proposal_pda,
+    };
+    let data = MultisigApproveProposalData {
+        args: MultisigVoteOnProposalArgs { memo: None },
+    };
+
+    let ix = Instruction::new_with_bytes(
+        SQUADS_MULTISIG_PROGRAM_ID,
+        &data.data(),
+        accounts.to_account_metas(),
+    );
+
+    // Compile to our TransactionMessage format
+    // Order matters for writability: after signer(s), the first `num_writable_non_signers`
+    // are considered writable. We need the child proposal to be writable for Approve.
+    let mut account_keys = vec![
+        parent_member_pubkey,       // 0: signer (parent vault PDA)
+        proposal_pda,               // 1: non-signer (writable)
+        child_multisig,             // 2: non-signer (readonly)
+        SQUADS_MULTISIG_PROGRAM_ID, // 3: program id
+    ];
+
+    // program_id_index for instruction
+    let program_id_index = account_keys
+        .iter()
+        .position(|k| *k == ix.program_id)
+        .unwrap_or_else(|| {
+            account_keys.push(ix.program_id);
+            account_keys.len() - 1
+        }) as u8;
+
+    // Map metas to indices
+    let account_indexes: Vec<u8> = ix
+        .accounts
+        .iter()
+        .map(|meta| {
+            account_keys
+                .iter()
+                .position(|k| *k == meta.pubkey)
+                .unwrap_or_else(|| {
+                    account_keys.push(meta.pubkey);
+                    account_keys.len() - 1
+                }) as u8
+        })
+        .collect();
+
+    let compiled = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: SmallVec::from(account_indexes),
+        data: SmallVec::from(ix.data),
+    };
+
+    TransactionMessage {
+        // The first key (parent member) is a signer and writable, matching the child instruction metas
+        num_signers: 1,
+        num_writable_signers: 1,
+        // Mark the first non-signer (the proposal) as writable to satisfy Anchor's mut constraint
+        num_writable_non_signers: 1,
+        account_keys: SmallVec::from(account_keys),
+        instructions: SmallVec::from(vec![compiled]),
+        address_table_lookups: SmallVec::from(vec![]),
+    }
+}
+
 pub fn display_deployment_info(
     network_index: usize,
     total_networks: usize,
@@ -462,14 +552,14 @@ pub fn display_deployment_info(
 pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> TransactionMessage {
     use crate::squads::SmallVec;
 
+    // Build activation flow without any funding transfer: allocate + assign only.
     let instructions = activate_feature_funded(&feature_id);
 
-    // Build account keys list for the message
-    let mut account_keys = vec![
-        feature_id,                           // 1: Feature account (writable)
-        solana_system_interface::program::ID, // 2: System program
-        crate::feature_gate_program::FEATURE_GATE_PROGRAM_ID, // 3: Feature gate program
-    ];
+    // Account keys: feature signer first, then programs
+    let mut account_keys: Vec<Pubkey> = Vec::with_capacity(3);
+    account_keys.push(feature_id); // signer, writable
+    account_keys.push(solana_system_interface::program::ID);
+    account_keys.push(crate::feature_gate_program::FEATURE_GATE_PROGRAM_ID);
 
     // Compile instructions into CompiledInstructions with SmallVec
     let mut compiled_instructions = Vec::new();
@@ -507,8 +597,8 @@ pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> Tran
     }
 
     TransactionMessage {
-        num_signers: 1,              // feature_id is the signer
-        num_writable_signers: 1,     // feature_id is writable signer
+        num_signers: 1,
+        num_writable_signers: 1,
         num_writable_non_signers: 0,
         account_keys: SmallVec::from(account_keys),
         instructions: SmallVec::from(compiled_instructions),
@@ -519,7 +609,7 @@ pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> Tran
 pub fn create_feature_revocation_transaction_message(feature_id: Pubkey) -> TransactionMessage {
     use crate::squads::SmallVec;
 
-    // Create feature revocation instruction for a test feature
+    // Create feature revocation instruction
     let instruction = crate::feature_gate_program::revoke_pending_activation(&feature_id);
 
     // Build account keys list for the message
@@ -1036,7 +1126,12 @@ pub async fn check_fee_payer_balance_on_networks(
             network_errors.len()
         ));
         for (network, error) in &network_errors {
-            println!("  {} {}: {}", "•".bright_yellow(), network.bright_white(), error);
+            println!(
+                "  {} {}: {}",
+                "•".bright_yellow(),
+                network.bright_white(),
+                error
+            );
         }
         println!();
     }

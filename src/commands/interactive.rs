@@ -1,11 +1,11 @@
 use crate::commands::{
-    approve_feature_gate_activation_proposal, approve_feature_gate_activation_revocation_proposal, config_command, create_command, execute_feature_gate_activation_proposal, show_command
+    approve_feature_gate_activation_proposal, approve_feature_gate_activation_revocation_proposal,
+    config_command, create_command, execute_feature_gate_activation_proposal, show_command,
 };
 use crate::squads::get_vault_pda;
 use crate::utils::*;
 use eyre::Result;
 use inquire::{Confirm, Select, Text};
-use solana_pubkey::Pubkey;
 
 pub async fn interactive_mode() -> Result<()> {
     let mut config = load_config()?;
