@@ -252,7 +252,17 @@ pub async fn approve_feature_gate_activation_proposal(
     output::Output::field("Base64:", &transaction_encoded_base64);
     output::Output::separator();
 
-    // Optional: also send it now and print signature
+    // Confirm before sending on-chain (EOA approval path)
+    let should_send = Confirm::new("Send this approve transaction now?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false);
+    if !should_send {
+        output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
+        return Ok(());
+    }
+
+    // Send it now and print signature
     let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
         .map_err(|e| eyre::eyre!("Failed to send transaction and proposal: {}", e))?;
     output::Output::field("Transaction sent successfully:", &signature);
@@ -482,6 +492,17 @@ pub async fn approve_feature_gate_activation_revocation_proposal(
     output::Output::separator();
     output::Output::field("Base64:", &transaction_encoded_base64);
 
+    // Confirm before sending on-chain (EOA approval path)
+    let should_send = Confirm::new("Send this approve transaction now?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false);
+    if !should_send {
+        output::Output::separator();
+        output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
+        return Ok(());
+    }
+
     let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
         .map_err(|e| eyre::eyre!("Failed to send transaction and proposal: {}", e))?;
     output::Output::separator();
@@ -560,6 +581,27 @@ pub async fn execute_feature_gate_activation_proposal(
         VersionedMessage::V0(exec_msg),
         &[&fee_payer_keypair.as_ref().unwrap()],
     )?;
+
+    let serialized_transaction = bincode::serialize(&transaction)?;
+
+    let transaction_encoded_bs58 = bs58::encode(&serialized_transaction).into_string();
+    let transaction_encoded_base64 = B64.encode(&serialized_transaction);
+
+    output::Output::header("Encoded Transactions:");
+    output::Output::separator();
+    output::Output::field("Base58:", &transaction_encoded_bs58);
+    output::Output::separator();
+    output::Output::field("Base64:", &transaction_encoded_base64);
+
+    // Confirm before sending on-chain (EOA execute path)
+    let should_send = Confirm::new("Send this execute transaction now?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false);
+    if !should_send {
+        output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
+        return Ok(());
+    }
 
     // Send and confirm
     let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
