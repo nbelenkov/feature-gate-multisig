@@ -6,7 +6,6 @@ use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use tokio::time::{sleep, Duration};
 
 use crate::squads::{get_vault_pda, Multisig as SquadsMultisig};
 use crate::{
@@ -188,23 +187,6 @@ pub async fn approve_feature_gate_activation_proposal(
                     .prompt()
                     .unwrap_or(false)
                 {
-                    // Briefly poll until status reflects approval on-chain to avoid races
-                    let mut tries = 0;
-                    while tries < 10 {
-                        let (appr, _th, _st) = get_proposal_status_and_threshold(
-                            &program_id,
-                            &parent_multisig,
-                            parent_proposal_index,
-                            &async_client,
-                        )
-                        .await?;
-                        if appr as u16 >= threshold {
-                            break;
-                        }
-                        sleep(Duration::from_millis(400)).await;
-                        tries += 1;
-                    }
-
                     // Refresh blockhash before building execute tx
                     let fresh_blockhash = async_client.get_latest_blockhash().await?;
                     let exec_msg = create_execute_transaction_message(
@@ -436,22 +418,6 @@ pub async fn approve_feature_gate_activation_revocation_proposal(
                     .unwrap_or(false)
                 {
                     // Briefly poll until status reflects approval on-chain
-                    let mut tries = 0;
-                    while tries < 10 {
-                        let (appr, _th, _st) = get_proposal_status_and_threshold(
-                            &program_id,
-                            &parent_multisig,
-                            parent_proposal_index,
-                            &async_client,
-                        )
-                        .await?;
-                        if appr as u16 >= threshold {
-                            break;
-                        }
-                        sleep(Duration::from_millis(400)).await;
-                        tries += 1;
-                    }
-
                     let fresh_blockhash = async_client.get_latest_blockhash().await?;
                     let exec_msg = create_execute_transaction_message(
                         &program_id,

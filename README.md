@@ -107,6 +107,17 @@ cargo test
 cargo test -- --nocapture
 ```
 
+## Testing setup
+
+To test multisigs use `squads-multisig-cli` to spin up a multisig and add the PDA Vault as a member of the feature gate multisig.
+
+```bash
+multisig-create --rpc-url <RPC_URL> --program-id <PROGRAM_ID> --keypair <KEYPAIR_PATH> --config-authority <CONFIG_AUTHORITY> --members <MEMBER_1> <MEMBER_2> ... --threshold <THRESHOLD>
+
+```
+
+see more info here https://docs.squads.so/main/development/cli/commands#multisig-create
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
