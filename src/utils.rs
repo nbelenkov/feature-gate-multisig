@@ -746,6 +746,67 @@ pub async fn create_and_send_transaction_proposal(
     Ok(())
 }
 
+/// Create and send a transaction to fund the feature gate account with rent-exempt lamports
+///
+/// # Arguments
+/// * `rpc_url` - The RPC endpoint to use
+/// * `fee_payer_signer` - The signer that will pay for the transaction and provide funding
+/// * `feature_gate_address` - The address of the feature gate account (vault PDA) to fund
+///
+/// # Returns
+/// Result containing the transaction signature or an error
+pub async fn create_and_send_funding_transaction(
+    rpc_url: &str,
+    fee_payer_signer: &Box<dyn Signer>,
+    feature_gate_address: &Pubkey,
+) -> Result<String> {
+    use crate::feature_gate_program::FEATURE_ACCOUNT_SIZE;
+    use solana_system_interface::instruction::transfer;
+
+    let rpc_client = create_rpc_client(rpc_url);
+
+    // Calculate rent-exempt minimum balance for feature account
+    let rent = rpc_client.get_minimum_balance_for_rent_exemption(FEATURE_ACCOUNT_SIZE)?;
+
+    crate::output::Output::info(&format!(
+        "Funding feature gate address with {} lamports (rent-exempt minimum for {} bytes)",
+        rent, FEATURE_ACCOUNT_SIZE
+    ));
+
+    // Create transfer instruction
+    let transfer_ix = transfer(&fee_payer_signer.pubkey(), feature_gate_address, rent);
+
+    // Get recent blockhash
+    let recent_blockhash = rpc_client
+        .get_latest_blockhash()
+        .map_err(|e| eyre::eyre!("Failed to get recent blockhash: {}", e))?;
+
+    // Create and sign transaction
+    let mut message =
+        solana_message::Message::new(&[transfer_ix], Some(&fee_payer_signer.pubkey()));
+    message.recent_blockhash = recent_blockhash;
+
+    let transaction = VersionedTransaction::try_new(
+        VersionedMessage::Legacy(message),
+        &[fee_payer_signer.as_ref()],
+    )
+    .map_err(|e| eyre::eyre!("Failed to create funding transaction: {}", e))?;
+
+    // Send and confirm transaction
+    let progress = ProgressBar::new_spinner().with_message("Sending funding transaction...");
+    progress.enable_steady_tick(Duration::from_millis(100));
+
+    let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
+        .map_err(|e| eyre::eyre!("Failed to send funding transaction: {}", e))?;
+
+    progress.finish_with_message(format!(
+        "Feature gate funded: {}",
+        signature.to_string().bright_green()
+    ));
+
+    Ok(signature)
+}
+
 // Validation functions
 pub fn validate_pubkey_with_retry(prompt: &str) -> Result<Pubkey> {
     loop {

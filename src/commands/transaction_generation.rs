@@ -146,6 +146,33 @@ pub async fn approve_common_feature_gate_proposal(
             ));
         }
 
+        // Display information about the parent multisig transaction that will be created
+        output::Output::header("Parent Multisig Transaction Details:");
+        output::Output::field("Parent Multisig:", &parent_multisig.to_string());
+        output::Output::field(
+            "Child Multisig:",
+            &feature_gate_multisig_address.to_string(),
+        );
+        output::Output::field("Transaction Index:", &parent_next_index.to_string());
+        output::Output::field(
+            "Action:",
+            if activation_or_revocation == 1 {
+                "Approve Feature Gate Activation"
+            } else {
+                "Approve Feature Gate Revocation"
+            },
+        );
+
+        // Ask for confirmation before creating the parent multisig proposal
+        if !Confirm::new("Create parent multisig proposal for this transaction?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+        {
+            output::Output::info("Parent multisig proposal creation cancelled.");
+            return Ok(());
+        }
+
         let tx_message = create_child_vote_approve_transaction_message(
             feature_gate_multisig_address,
             activation_or_revocation,

@@ -175,6 +175,9 @@ async fn deploy_to_single_network(
     )
     .await?;
 
+    // Fund the vault address (feature gate account) with rent-exempt lamports
+    create_and_send_funding_transaction(rpc_url, fee_payer_signer, &vault_address).await?;
+
     Ok(DeploymentResult {
         rpc_url: rpc_url.to_string(),
         multisig_address,

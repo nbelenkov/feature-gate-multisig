@@ -16,18 +16,20 @@ pub async fn interactive_mode() -> Result<()> {
             "Create new feature gate multisig",
             "Show feature gate multisig details",
             "Show configuration",
-            "Transaction Generation",
+            "Approve/Execute Feature Gate Proposals",
             "Exit",
         ];
 
         let choice: &str = Select::new("What would you like to do?", options).prompt()?;
+
+        println!("In the current setup, only the fee payer keypair is used for transactions, hence for EOA voting fee payer = voting account. For multisig setup, the fee payer needs to be a member of the parent multisig.\n");
 
         match choice {
             "Create new feature gate multisig" => {
                 let feepayer_path = prompt_for_fee_payer_path(&config)?;
                 create_command(&mut config, None, vec![], Some(feepayer_path)).await?;
             }
-            "Transaction Generation" => {
+            "Approve/Execute Feature Gate Proposals" => {
                 let feature_gate_multisig_address =
                     prompt_for_pubkey("Enter the feature gate multisig address:")?;
                 let feature_gate_id = get_vault_pda(&feature_gate_multisig_address, 0, None).0;
