@@ -721,53 +721,20 @@ pub fn create_transaction_and_proposal_message(
     Ok((message, transaction_pda, proposal_pda))
 }
 
-pub fn create_approve_activation_transaction_message(
+pub fn create_common_activation_transaction_message(
     program_id: &Pubkey,
     feature_gate_multisig_address: &Pubkey,
     member_pubkey: &Pubkey,
     fee_payer_pubkey: &Pubkey,
     recent_blockhash: Hash,
+    proposal_index: u64,
 ) -> eyre::Result<Message> {
     // Activation proposal index is 1 (proposal 0 is reserved for the initial create)
-    let (proposal_pda, _proposal_bump) =
-        get_proposal_pda(feature_gate_multisig_address, 1, Some(program_id));
-
-    let account_keys = MultisigVoteOnProposalAccounts {
-        multisig: *feature_gate_multisig_address,
-        member: *member_pubkey,
-        proposal: proposal_pda,
-    };
-    let instruction_args = MultisigVoteOnProposalArgs { memo: None };
-    let instruction_data = MultisigApproveProposalData {
-        args: instruction_args,
-    };
-
-    let approve_instruction = Instruction::new_with_bytes(
-        *program_id,
-        &instruction_data.data(),
-        account_keys.to_account_metas(),
+    let (proposal_pda, _proposal_bump) = get_proposal_pda(
+        feature_gate_multisig_address,
+        proposal_index,
+        Some(program_id),
     );
-
-    let message = Message::try_compile(
-        fee_payer_pubkey,
-        &[approve_instruction],
-        &[],
-        recent_blockhash,
-    )?;
-
-    Ok(message)
-}
-
-pub fn create_approve_activation_revocation_transaction_message(
-    program_id: &Pubkey,
-    feature_gate_multisig_address: &Pubkey,
-    member_pubkey: &Pubkey,
-    fee_payer_pubkey: &Pubkey,
-    recent_blockhash: Hash,
-) -> eyre::Result<Message> {
-    // Revocation proposal index is 2
-    let (proposal_pda, _proposal_bump) =
-        get_proposal_pda(feature_gate_multisig_address, 2, Some(program_id));
 
     let account_keys = MultisigVoteOnProposalAccounts {
         multisig: *feature_gate_multisig_address,

@@ -1,6 +1,7 @@
 use crate::commands::{
     approve_feature_gate_activation_proposal, approve_feature_gate_activation_revocation_proposal,
-    config_command, create_command, execute_feature_gate_activation_proposal, show_command,
+    config_command, create_command, execute_feature_gate_activation_proposal,
+    execute_feature_gate_revocation_proposal, show_command,
 };
 use crate::squads::get_vault_pda;
 use crate::utils::*;
@@ -36,6 +37,7 @@ pub async fn interactive_mode() -> Result<()> {
                     "Approve feature gate activation proposal",
                     "Approve feature gate activation revocation proposal",
                     "Execute feature gate activation proposal",
+                    "Execute feature gate revocation proposal",
                     "Exit",
                 ];
                 let choice: &str = Select::new("What would you like to do?", options).prompt()?;
@@ -89,6 +91,25 @@ pub async fn interactive_mode() -> Result<()> {
                             "Enter the voting key: (Can be either EOA or parent multisig)",
                         )?;
                         execute_feature_gate_activation_proposal(
+                            &config,
+                            feature_gate_multisig_address,
+                            voting_key,
+                            fee_payer_path,
+                            None,
+                        )
+                        .await?;
+                    }
+                    "Execute feature gate revocation proposal" => {
+                        Confirm::new(&format!(
+                            "You're executing the activation of the following feature gate: {}?",
+                            feature_gate_id
+                        ))
+                        .with_default(true)
+                        .prompt()?;
+                        let voting_key = prompt_for_pubkey(
+                            "Enter the voting key: (Can be either EOA or parent multisig)",
+                        )?;
+                        execute_feature_gate_revocation_proposal(
                             &config,
                             feature_gate_multisig_address,
                             voting_key,
