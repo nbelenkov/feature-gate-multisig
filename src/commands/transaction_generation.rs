@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use eyre::Result;
+use solana_clap_v3_utils::keypair::signer_from_path;
 use solana_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
 use solana_commitment_config::CommitmentConfig;
 use solana_message::VersionedMessage;
@@ -70,7 +71,14 @@ pub async fn approve_common_feature_gate_proposal(
     let program_id = program_id
         .unwrap_or_else(|| Pubkey::from_str_const("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf"));
 
-    let fee_payer_keypair = load_fee_payer_keypair(config, Some(fee_payer_path))?;
+    let fee_payer_signer = signer_from_path(
+        &Default::default(), // matches
+        &fee_payer_path,
+        "fee payer",
+        &mut None, // wallet_manager
+    )
+    .map_err(|e| eyre::eyre!("Failed to load fee payer: {}", e))?;
+
     let rpc_url = choose_network_from_config(config)?;
     let rpc_client = create_rpc_client(&rpc_url);
     let blockhash = rpc_client.get_latest_blockhash()?;
@@ -146,8 +154,8 @@ pub async fn approve_common_feature_gate_proposal(
 
         let (msg, tx_pda, prop_pda) = create_transaction_and_proposal_message(
             None,
-            &fee_payer_keypair.as_ref().unwrap().pubkey(),
-            &fee_payer_keypair.as_ref().unwrap().pubkey(),
+            &fee_payer_signer.pubkey(),
+            &fee_payer_signer.pubkey(),
             &parent_multisig,
             parent_next_index,
             0,
@@ -159,11 +167,8 @@ pub async fn approve_common_feature_gate_proposal(
         output::Output::address("Parent transaction PDA:", &tx_pda.to_string());
         output::Output::address("Parent proposal PDA:", &prop_pda.to_string());
 
-        let fee_payer_signer = fee_payer_keypair.as_ref().unwrap();
-        let transaction = VersionedTransaction::try_new(
-            VersionedMessage::V0(msg),
-            &[fee_payer_signer as &dyn Signer],
-        )?;
+        let transaction =
+            VersionedTransaction::try_new(VersionedMessage::V0(msg), &[fee_payer_signer.as_ref()])?;
         let signature =
             crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
                 .map_err(|e| eyre::eyre!("Failed to send parent vote transaction: {}", e))?;
@@ -181,14 +186,14 @@ pub async fn approve_common_feature_gate_proposal(
             let approve_msg = create_parent_approve_proposal_message(
                 &program_id,
                 &parent_multisig,
-                &fee_payer_keypair.as_ref().unwrap().pubkey(),
-                &fee_payer_keypair.as_ref().unwrap().pubkey(),
+                &fee_payer_signer.pubkey(),
+                &fee_payer_signer.pubkey(),
                 parent_proposal_index,
                 blockhash,
             )?;
             let approve_tx = VersionedTransaction::try_new(
                 VersionedMessage::V0(approve_msg),
-                &[fee_payer_signer as &dyn Signer],
+                &[fee_payer_signer.as_ref()],
             )?;
             let approve_sig =
                 crate::provision::send_and_confirm_transaction(&approve_tx, &rpc_client)
@@ -237,7 +242,7 @@ pub async fn approve_common_feature_gate_proposal(
                     .await?;
                     let exec_tx = VersionedTransaction::try_new(
                         VersionedMessage::V0(exec_msg),
-                        &[fee_payer_signer as &dyn Signer],
+                        &[fee_payer_signer.as_ref()],
                     )?;
                     let exec_sig =
                         crate::provision::send_and_confirm_transaction(&exec_tx, &rpc_client)
@@ -262,7 +267,7 @@ pub async fn approve_common_feature_gate_proposal(
         &program_id,
         &feature_gate_multisig_address,
         &voting_key,
-        &fee_payer_keypair.as_ref().unwrap().pubkey(),
+        &fee_payer_signer.pubkey(),
         blockhash,
         activation_or_revocation,
     )
@@ -275,7 +280,7 @@ pub async fn approve_common_feature_gate_proposal(
 
     let transaction = VersionedTransaction::try_new(
         VersionedMessage::V0(transaction_message),
-        &[&fee_payer_keypair.unwrap()],
+        &[fee_payer_signer.as_ref()],
     )?;
     let serialized_transaction = bincode::serialize(&transaction)?;
 
@@ -353,7 +358,14 @@ pub async fn execute_common_feature_gate_proposal(
     let program_id = program_id
         .unwrap_or_else(|| Pubkey::from_str_const("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf"));
 
-    let fee_payer_keypair = load_fee_payer_keypair(config, Some(fee_payer_path))?;
+    let fee_payer_signer = signer_from_path(
+        &Default::default(), // matches
+        &fee_payer_path,
+        "fee payer",
+        &mut None, // wallet_manager
+    )
+    .map_err(|e| eyre::eyre!("Failed to load fee payer: {}", e))?;
+
     let rpc_url = choose_network_from_config(config)?;
     // Non-blocking client for data fetches, blocking for simulate/send
     let async_client = AsyncRpcClient::new(rpc_url.clone());
@@ -403,7 +415,7 @@ pub async fn execute_common_feature_gate_proposal(
         &program_id,
         &feature_gate_multisig_address,
         &voting_key,
-        &fee_payer_keypair.as_ref().unwrap().pubkey(),
+        &fee_payer_signer.pubkey(),
         activation_or_revocation,
         &async_client,
         blockhash,
@@ -412,7 +424,7 @@ pub async fn execute_common_feature_gate_proposal(
 
     let transaction = VersionedTransaction::try_new(
         VersionedMessage::V0(exec_msg),
-        &[&fee_payer_keypair.as_ref().unwrap()],
+        &[fee_payer_signer.as_ref()],
     )?;
 
     let serialized_transaction = bincode::serialize(&transaction)?;

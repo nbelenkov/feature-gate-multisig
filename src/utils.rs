@@ -662,7 +662,7 @@ pub fn create_feature_revocation_transaction_message(feature_id: Pubkey) -> Tran
 
 pub async fn create_and_send_transaction_proposal(
     rpc_url: &str,
-    fee_payer_keypair: &Option<Keypair>,
+    fee_payer_signer: &Box<dyn Signer>,
     contributor_keypair: &Keypair,
     multisig_address: &Pubkey,
     transaction_type: &str,
@@ -686,10 +686,7 @@ pub async fn create_and_send_transaction_proposal(
         .get_latest_blockhash()
         .map_err(|e| eyre::eyre!("Failed to get recent blockhash: {}", e))?;
 
-    let fee_payer_pubkey = fee_payer_keypair
-        .as_ref()
-        .map(|kp| kp.pubkey())
-        .unwrap_or_else(|| contributor_keypair.pubkey());
+    let fee_payer_pubkey = fee_payer_signer.pubkey();
 
     // Use the integrated create_transaction_and_proposal_message function from provision.rs
     let (message, _transaction_pda, _proposal_pda) =
@@ -711,7 +708,7 @@ pub async fn create_and_send_transaction_proposal(
         &[contributor_keypair]
     } else {
         &[
-            fee_payer_keypair.as_ref().unwrap() as &dyn Signer,
+            fee_payer_signer.as_ref(),
             contributor_keypair as &dyn Signer,
         ]
     };
