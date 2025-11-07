@@ -66,7 +66,7 @@ The tool saves configuration to `~/.feature-gate-multisig-tool/config.json`:
     "https://api.testnet.solana.com",
     "https://api.mainnet-beta.solana.com"
   ],
-  "fee_payer_path": "~/.config/solana/id.json"
+  "fee_payer_path": "usb://ledger"
 }
 ```
 

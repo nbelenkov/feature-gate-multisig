@@ -289,10 +289,7 @@ pub fn prompt_for_pubkey(prompt: &str) -> Result<Pubkey> {
 }
 
 pub fn prompt_for_fee_payer_path(config: &Config) -> Result<String> {
-    let default_feepayer = config
-        .fee_payer_path
-        .as_deref()
-        .unwrap_or("~/.config/solana/id.json");
+    let default_feepayer = config.fee_payer_path.as_deref().unwrap_or("usb://ledger");
 
     let feepayer_path = Text::new("Enter fee payer keypair file path:")
         .with_default(default_feepayer)
