@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use eyre::Result;
 use solana_clap_v3_utils::keypair::signer_from_path;
 use solana_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
@@ -16,10 +15,7 @@ use crate::{
         create_parent_approve_proposal_message, create_rpc_client,
         create_transaction_and_proposal_message, get_proposal_status_and_threshold,
     },
-    utils::{
-        choose_network_from_config, create_child_vote_approve_transaction_message,
-        load_fee_payer_keypair, Config,
-    },
+    utils::{choose_network_from_config, create_child_vote_approve_transaction_message, Config},
 };
 use borsh::BorshDeserialize;
 use inquire::Confirm;
@@ -309,17 +305,6 @@ pub async fn approve_common_feature_gate_proposal(
         VersionedMessage::V0(transaction_message),
         &[fee_payer_signer.as_ref()],
     )?;
-    let serialized_transaction = bincode::serialize(&transaction)?;
-
-    let transaction_encoded_bs58 = bs58::encode(&serialized_transaction).into_string();
-    let transaction_encoded_base64 = B64.encode(&serialized_transaction);
-
-    output::Output::header("Encoded Transactions:");
-    output::Output::separator();
-    output::Output::field("Base58:", &transaction_encoded_bs58);
-    output::Output::separator();
-    output::Output::field("Base64:", &transaction_encoded_base64);
-    output::Output::separator();
 
     // Confirm before sending on-chain (EOA approval path)
     let should_send = Confirm::new("Send this approve transaction now?")
@@ -453,17 +438,6 @@ pub async fn execute_common_feature_gate_proposal(
         VersionedMessage::V0(exec_msg),
         &[fee_payer_signer.as_ref()],
     )?;
-
-    let serialized_transaction = bincode::serialize(&transaction)?;
-
-    let transaction_encoded_bs58 = bs58::encode(&serialized_transaction).into_string();
-    let transaction_encoded_base64 = B64.encode(&serialized_transaction);
-
-    output::Output::header("Encoded Transactions:");
-    output::Output::separator();
-    output::Output::field("Base58:", &transaction_encoded_bs58);
-    output::Output::separator();
-    output::Output::field("Base64:", &transaction_encoded_base64);
 
     // Confirm before sending on-chain (EOA execute path)
     let should_send = Confirm::new("Send this execute transaction now?")

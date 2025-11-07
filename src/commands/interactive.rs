@@ -16,7 +16,7 @@ pub async fn interactive_mode() -> Result<()> {
             "Create new feature gate multisig",
             "Show feature gate multisig details",
             "Show configuration",
-            "Approve/Execute Feature Gate Proposals",
+            "Approve/Execute Feature Gate Proposals (transactions are submited on-chain)",
             "Exit",
         ];
 
