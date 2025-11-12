@@ -29,7 +29,7 @@ pub async fn interactive_mode() -> Result<()> {
                 let feepayer_path = prompt_for_fee_payer_path(&config)?;
                 create_command(&mut config, None, vec![], Some(feepayer_path)).await?;
             }
-            "Approve/Execute Feature Gate Proposals" => {
+            "Approve/Execute Feature Gate Proposals (transactions are submited on-chain)" => {
                 let feature_gate_multisig_address =
                     prompt_for_pubkey("Enter the feature gate multisig address:")?;
                 let feature_gate_id = get_vault_pda(&feature_gate_multisig_address, 0, None).0;

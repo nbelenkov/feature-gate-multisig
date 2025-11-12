@@ -4,10 +4,11 @@ use crate::squads::{
     Member, MultisigApproveProposalData, MultisigCreateArgsV2, MultisigCreateProposalAccounts,
     MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
     MultisigCreateV2Accounts, MultisigCreateV2Data, MultisigExecuteTransactionAccounts,
-    MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, Permissions, ProgramConfig,
-    TransactionMessage, VaultTransaction, VaultTransactionCreateArgs,
-    VaultTransactionCreateArgsData, EXECUTE_TRANSACTION_DISCRIMINATOR,
+    MultisigExecuteTransactionArgs, MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs,
+    Permissions, ProgramConfig, SmallVec, TransactionMessage, VaultTransactionCreateArgs,
+    VaultTransactionCreateArgsData, EXECUTE_TRANSACTION_DISCRIMINATOR, SQUADS_MULTISIG_PROGRAM_ID,
 };
+
 use crate::utils::decode_permissions;
 use borsh::BorshDeserialize;
 use colored::Colorize;
@@ -15,7 +16,6 @@ use dialoguer::Confirm;
 use eyre::eyre;
 use indicatif::ProgressBar;
 use solana_client::client_error::ClientErrorKind;
-use solana_client::nonblocking;
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSendTransactionConfig;
 use solana_client::rpc_request::{RpcError, RpcResponseErrorData};
@@ -801,95 +801,163 @@ pub fn create_parent_approve_proposal_message(
 }
 
 /// Fetch proposal approvals count, parent threshold, and proposal status for a given proposal index.
-pub async fn get_proposal_status_and_threshold(
+pub fn get_proposal_status_and_threshold(
     program_id: &Pubkey,
     multisig_address: &Pubkey,
     proposal_index: u64,
-    rpc_client: &nonblocking::rpc_client::RpcClient,
+    rpc_client: &RpcClient,
 ) -> eyre::Result<(usize, u16, crate::squads::ProposalStatus)> {
     use crate::squads::{get_proposal_pda, Multisig as SquadsMultisig, Proposal};
-    use borsh::BorshDeserialize;
 
     // Multisig threshold
-    let ms_acc = rpc_client.get_account(multisig_address).await?;
+    let ms_acc = rpc_client.get_account(multisig_address)?;
     let ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &ms_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
     // Proposal approved count and status
     let (proposal_pda, _) = get_proposal_pda(multisig_address, proposal_index, Some(program_id));
-    let prop_acc = rpc_client.get_account(&proposal_pda).await?;
+    let prop_acc = rpc_client.get_account(&proposal_pda)?;
     let prop: Proposal = BorshDeserialize::deserialize(&mut &prop_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize proposal: {}", e))?;
 
     Ok((prop.approved.len(), ms.threshold, prop.status))
 }
-pub async fn create_execute_activation_transaction_message(
-    program_id: &Pubkey,
-    feature_gate_multisig_address: &Pubkey,
-    member_pubkey: &Pubkey,
-    fee_payer_pubkey: &Pubkey,
-    rpc_client: &nonblocking::rpc_client::RpcClient,
-    recent_blockhash: Hash,
-) -> eyre::Result<Message> {
-    // Activation proposal/transaction indexes are 1
-    let (proposal_pda, _proposal_bump) =
-        get_proposal_pda(feature_gate_multisig_address, 1, Some(program_id));
-    let (transaction_pda, _transaction_bump) =
-        get_transaction_pda(feature_gate_multisig_address, 1, Some(program_id));
-    let _vault_pda = get_vault_pda(feature_gate_multisig_address, 0, Some(program_id));
 
-    let transaction_account_data = rpc_client.get_account_data(&transaction_pda).await?;
-    let transaction_contents =
-        VaultTransaction::try_from_slice(&transaction_account_data[8..]).unwrap();
-    let transaction_message = transaction_contents.message;
+/// Build a TransactionMessage for a parent multisig to execute a child's proposal.
+/// This creates a single instruction that calls Squads `ExecuteTransaction` on the child multisig,
+/// with `member_pubkey` set to the parent vault PDA. The resulting TransactionMessage can
+/// be embedded into a parent multisig transaction using `create_transaction_and_proposal_message`.
+pub fn create_child_execute_transaction_message(
+    child_multisig: Pubkey,
+    child_tx_index: u64,
+    parent_member_pubkey: Pubkey,
+    child_transaction_accounts: Vec<solana_instruction::AccountMeta>,
+) -> TransactionMessage {
+    // Derive child's proposal and transaction PDAs
+    let (proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        child_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (transaction_pda, _) = get_transaction_pda(
+        &child_multisig,
+        child_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
 
-    let mut execution_account_metas = Vec::new();
-    // Build account metas from transaction_message
-    for (i, account_key) in transaction_message.account_keys.iter().enumerate() {
-        // Inner message signer flags should NOT require outer transaction signatures.
-        // The program will handle signing (ephemeral/program signers) during execution.
-        let is_writable = transaction_message.is_static_writable_index(i);
-        if is_writable {
-            execution_account_metas.push(AccountMeta::new(*account_key, false));
+    // Construct the execute instruction for the child multisig
+    let accounts = MultisigExecuteTransactionAccounts {
+        multisig: child_multisig,
+        proposal: proposal_pda,
+        transaction: transaction_pda,
+        member: parent_member_pubkey,
+    };
+
+    let args = MultisigExecuteTransactionArgs { memo: None };
+    let mut instruction_data = Vec::new();
+    instruction_data.extend_from_slice(EXECUTE_TRANSACTION_DISCRIMINATOR);
+    instruction_data.extend_from_slice(&borsh::to_vec(&args).unwrap());
+
+    let header_set: std::collections::HashSet<Pubkey> = [
+        child_multisig,
+        proposal_pda,
+        transaction_pda,
+        parent_member_pubkey,
+    ]
+    .into_iter()
+    .collect();
+
+    let filtered_dynamic_accounts: Vec<solana_instruction::AccountMeta> =
+        child_transaction_accounts
+            .into_iter()
+            .filter(|m| !header_set.contains(&m.pubkey))
+            .collect();
+
+    // Build metas in correct header+dynamic order for Squads message grouping
+    let all_metas = accounts.to_account_metas(filtered_dynamic_accounts);
+
+    // Group account_keys to match Squads TransactionMessage layout:
+    // [signers | writable non-signers | readonly non-signers]
+    let mut signer_keys: Vec<Pubkey> = vec![parent_member_pubkey];
+    let mut writable_non_signers: Vec<Pubkey> = Vec::new();
+    let mut readonly_non_signers: Vec<Pubkey> = Vec::new();
+
+    for m in &all_metas {
+        if m.is_signer {
+            if m.pubkey != parent_member_pubkey {
+                signer_keys.push(m.pubkey);
+            }
+        } else if m.is_writable {
+            writable_non_signers.push(m.pubkey);
         } else {
-            execution_account_metas.push(AccountMeta::new_readonly(*account_key, false));
+            readonly_non_signers.push(m.pubkey);
         }
     }
 
-    let account_keys = MultisigExecuteTransactionAccounts {
-        multisig: *feature_gate_multisig_address,
-        proposal: proposal_pda,
-        transaction: transaction_pda,
-        member: *member_pubkey,
+    // Ensure header accounts are present in the correct groups
+    // proposal must be writable, multisig/transaction readonly
+    if !writable_non_signers.contains(&proposal_pda) {
+        writable_non_signers.insert(0, proposal_pda);
+    }
+    if !readonly_non_signers.contains(&child_multisig) {
+        readonly_non_signers.insert(0, child_multisig);
+    }
+    if !readonly_non_signers.contains(&transaction_pda) {
+        readonly_non_signers.insert(1, transaction_pda);
+    }
+
+    // Construct final account_keys list in grouped order
+    let mut account_keys: Vec<Pubkey> = Vec::new();
+    account_keys.extend(signer_keys.iter().copied());
+    account_keys.extend(writable_non_signers.iter().copied());
+    // Program id goes in readonly non-signers as well
+    if !readonly_non_signers.contains(&SQUADS_MULTISIG_PROGRAM_ID) {
+        readonly_non_signers.push(SQUADS_MULTISIG_PROGRAM_ID);
+    }
+    account_keys.extend(readonly_non_signers.iter().copied());
+
+    let program_id_index = account_keys
+        .iter()
+        .position(|k| *k == SQUADS_MULTISIG_PROGRAM_ID)
+        .unwrap() as u8;
+
+    let account_indexes: Vec<u8> = all_metas
+        .iter()
+        .map(|meta| {
+            account_keys
+                .iter()
+                .position(|k| *k == meta.pubkey)
+                .expect("meta key present in account_keys") as u8
+        })
+        .collect();
+
+    let compiled = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: SmallVec::from(account_indexes),
+        data: SmallVec::from(instruction_data.clone()),
     };
 
-    // Include dynamic metas from the inner transaction message
-    let account_metas = account_keys.to_account_metas(execution_account_metas);
+    // Count writable non-signers from the instruction metas directly
+    let num_writable_non_signers = writable_non_signers.len() as u8;
 
-    let execute_instruction = Instruction::new_with_bytes(
-        *program_id,
-        &EXECUTE_TRANSACTION_DISCRIMINATOR,
-        account_metas,
-    );
-
-    let message = Message::try_compile(
-        fee_payer_pubkey,
-        &[execute_instruction],
-        &[],
-        recent_blockhash,
-    )?;
-
-    Ok(message)
+    TransactionMessage {
+        num_signers: signer_keys.len() as u8,
+        num_writable_signers: 0, // execute expects member signer to be readonly
+        num_writable_non_signers,
+        account_keys: SmallVec::from(account_keys),
+        instructions: SmallVec::from(vec![compiled]),
+        address_table_lookups: SmallVec::from(vec![]),
+    }
 }
 
 /// Create an execute message for any Squads multisig proposal at `proposal_index`.
-pub async fn create_execute_transaction_message(
+pub fn create_execute_transaction_message(
     program_id: &Pubkey,
     multisig_address: &Pubkey,
     member_pubkey: &Pubkey,
     fee_payer_pubkey: &Pubkey,
     proposal_index: u64,
-    rpc_client: &nonblocking::rpc_client::RpcClient,
+    rpc_client: &RpcClient,
     recent_blockhash: Hash,
 ) -> eyre::Result<Message> {
     use crate::squads::{
@@ -902,7 +970,7 @@ pub async fn create_execute_transaction_message(
         get_transaction_pda(multisig_address, proposal_index, Some(program_id));
     let _vault_pda = get_vault_pda(multisig_address, 0, Some(program_id));
 
-    let transaction_account_data = rpc_client.get_account_data(&transaction_pda).await?;
+    let transaction_account_data = rpc_client.get_account_data(&transaction_pda)?;
     let transaction_contents =
         VaultTransaction::try_from_slice(&transaction_account_data[8..]).unwrap();
     let transaction_message = transaction_contents.message;
@@ -971,7 +1039,7 @@ pub fn parse_members(member_strings: Vec<String>) -> Result<Vec<Member>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::squads::{CompiledInstruction, SmallVec, TransactionMessage};
+    use crate::squads::CompiledInstruction;
     use borsh::BorshDeserialize;
 
     fn create_test_transaction_message() -> TransactionMessage {
