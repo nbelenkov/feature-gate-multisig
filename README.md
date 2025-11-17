@@ -66,16 +66,29 @@ The tool saves configuration to `~/.feature-gate-multisig-tool/config.json`:
     "https://api.testnet.solana.com",
     "https://api.mainnet-beta.solana.com"
   ],
-  "fee_payer_path": "~/.config/solana/id.json"
+  "network": "https://api.devnet.solana.com",
+  "fee_payer_path": "usb://ledger"
 }
 ```
 
 ## Transaction Generation
 
 Once a multisig is created, use the transaction generation commands to:
-- Vote on Feature Activation Proposal (Index 0)
-- Vote on Feature Activation Revocation Proposal (Index 1)
+- Vote on Feature Activation Proposal (Index 1)
+- Vote on Feature Activation Revocation Proposal (Index 2)
 - Execute proposals when threshold is met
+
+### Parent → Child multisig voting
+
+If a parent multisig is configured to vote on a proposal in a child multisig, the child multisig must include the parent vault PDA as a member with Vote permission (not the parent multisig address itself).
+
+Why: During execution, the parent program can sign for its vault PDA using PDA seeds, but it cannot sign as the parent multisig address in CPI. Listing the parent multisig address as the voter will lead to missing/invalid signer errors. Listing the parent vault PDA avoids this and enables programmatic approval.
+
+What to add to the child multisig:
+- Member: Parent vault PDA (usually index 0)
+- Permissions: Vote (and optionally Execute if the parent should execute child proposals)
+
+The CLI will print a clear error and the exact PDA to add if the child multisig isn’t configured correctly.
 
 ## Network Support
 
@@ -94,6 +107,17 @@ cargo test
 # Run with output
 cargo test -- --nocapture
 ```
+
+## Testing setup
+
+To test multisigs use `squads-multisig-cli` to spin up a multisig and add the PDA Vault as a member of the feature gate multisig.
+
+```bash
+multisig-create --rpc-url <RPC_URL> --program-id <PROGRAM_ID> --keypair <KEYPAIR_PATH> --config-authority <CONFIG_AUTHORITY> --members <MEMBER_1> <MEMBER_2> ... --threshold <THRESHOLD>
+
+```
+
+see more info here https://docs.squads.so/main/development/cli/commands#multisig-create
 
 ## License
 

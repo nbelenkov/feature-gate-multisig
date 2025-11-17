@@ -16,7 +16,7 @@ pub const BASE_RETRY_DELAY_MS: u64 = 500;
 pub const CONFIRMATION_TIMEOUT_MS: u64 = 30_000; // 30 seconds
 pub const CONFIRMATION_POLL_INTERVAL_MS: u64 = 1000; // 1 second
 
-// Account data retry constants  
+// Account data retry constants
 pub const MAX_ACCOUNT_RETRIES: usize = 3;
 pub const BASE_ACCOUNT_RETRY_DELAY_MS: u64 = 500;
 

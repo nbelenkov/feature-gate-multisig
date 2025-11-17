@@ -4,6 +4,7 @@ use crate::squads::{get_proposal_pda, get_vault_pda, Member, Permissions};
 use crate::utils::*;
 use colored::*;
 use eyre::Result;
+use solana_clap_v3_utils::keypair::signer_from_path;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -23,8 +24,14 @@ pub async fn create_command(
     // Collect configuration and members
     let (final_threshold, mut members) = review_and_collect_configuration(config, threshold)?;
 
-    // Load fee payer keypair from CLI arg or config
-    let fee_payer_keypair = load_fee_payer_keypair(config, keypair_path)?;
+    // Load fee payer signer from CLI arg or config (supports hardware wallets via usb://ledger)
+    let fee_payer_path = keypair_path
+        .or_else(|| config.fee_payer_path.clone())
+        .ok_or_else(|| eyre::eyre!("Fee payer keypair path is required"))?;
+
+    let fee_payer_signer =
+        signer_from_path(&Default::default(), &fee_payer_path, "fee payer", &mut None)
+            .map_err(|e| eyre::eyre!("Failed to load fee payer: {}", e))?;
 
     // Create setup keypair (always separate from fee payer)
     let setup_keypair = Keypair::new();
@@ -56,10 +63,7 @@ pub async fn create_command(
 
     // Check fee payer balance on all networks before deployment
     if use_saved_networks && !saved_networks.is_empty() {
-        let fee_payer_pubkey = fee_payer_keypair
-            .as_ref()
-            .map(|kp| kp.pubkey())
-            .unwrap_or_else(|| setup_keypair.pubkey());
+        let fee_payer_pubkey = fee_payer_signer.pubkey();
 
         check_fee_payer_balance_on_networks(&fee_payer_pubkey, &saved_networks, 0.05).await?;
     }
@@ -69,7 +73,7 @@ pub async fn create_command(
             &saved_networks,
             &create_key,
             &setup_keypair,
-            &fee_payer_keypair,
+            &fee_payer_signer,
             &members,
             final_threshold,
         )
@@ -79,7 +83,7 @@ pub async fn create_command(
             config,
             &create_key,
             &setup_keypair,
-            &fee_payer_keypair,
+            &fee_payer_signer,
             &members,
             final_threshold,
         )
@@ -119,7 +123,7 @@ async fn deploy_to_single_network(
     total_networks: usize,
     create_key: &Keypair,
     setup_keypair: &Keypair,
-    fee_payer_keypair: &Option<Keypair>,
+    fee_payer_signer: &Box<dyn Signer>,
     members: &[Member],
     threshold: u16,
 ) -> Result<DeploymentResult> {
@@ -134,10 +138,7 @@ async fn deploy_to_single_network(
     //     members,
     // );
 
-    let signer_for_creation = fee_payer_keypair
-        .as_ref()
-        .map(|kp| kp as &dyn Signer)
-        .unwrap_or(setup_keypair as &dyn Signer);
+    let signer_for_creation = fee_payer_signer.as_ref();
 
     let (multisig_address, signature) = create_multisig(
         rpc_url.to_string(),
@@ -156,7 +157,7 @@ async fn deploy_to_single_network(
     // Create both activation and revocation transactions
     create_and_send_transaction_proposal(
         rpc_url,
-        fee_payer_keypair,
+        fee_payer_signer,
         setup_keypair,
         &multisig_address,
         "activation",
@@ -166,13 +167,16 @@ async fn deploy_to_single_network(
 
     create_and_send_transaction_proposal(
         rpc_url,
-        fee_payer_keypair,
+        fee_payer_signer,
         setup_keypair,
         &multisig_address,
         "revocation",
         2, // Transaction index 2 (revocation)
     )
     .await?;
+
+    // Fund the vault address (feature gate account) with rent-exempt lamports
+    create_and_send_funding_transaction(rpc_url, fee_payer_signer, &vault_address).await?;
 
     Ok(DeploymentResult {
         rpc_url: rpc_url.to_string(),
@@ -186,7 +190,7 @@ async fn deploy_to_saved_networks(
     networks: &[String],
     create_key: &Keypair,
     setup_keypair: &Keypair,
-    fee_payer_keypair: &Option<Keypair>,
+    fee_payer_signer: &Box<dyn Signer>,
     members: &[Member],
     threshold: u16,
 ) -> Result<Vec<DeploymentResult>> {
@@ -199,7 +203,7 @@ async fn deploy_to_saved_networks(
             networks.len(),
             create_key,
             setup_keypair,
-            fee_payer_keypair,
+            fee_payer_signer,
             members,
             threshold,
         )
@@ -231,7 +235,7 @@ async fn deploy_to_manual_networks(
     config: &Config,
     create_key: &Keypair,
     contributor_keypair: &Keypair,
-    fee_payer_keypair: &Option<Keypair>,
+    fee_payer_signer: &Box<dyn Signer>,
     members: &[Member],
     threshold: u16,
 ) -> Result<Vec<DeploymentResult>> {
@@ -248,7 +252,7 @@ async fn deploy_to_manual_networks(
             1,
             create_key,
             contributor_keypair,
-            fee_payer_keypair,
+            fee_payer_signer,
             members,
             threshold,
         )
