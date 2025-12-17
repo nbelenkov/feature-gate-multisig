@@ -8,10 +8,10 @@ mod utils;
 
 use crate::commands::{config_command, create_command, interactive_mode, show_command};
 use crate::output::Output;
-use crate::utils::{load_config, prompt_for_threshold};
-use eyre::Result;
+use crate::utils::load_config;
 use clap::{Parser, Subcommand};
 use colored::*;
+use eyre::Result;
 
 #[derive(Parser)]
 #[command(name = "feature-gate-multisig-tool")]
@@ -93,7 +93,6 @@ The contributor key receives Initiate-only permissions, while additional members
     Config,
 }
 
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -113,7 +112,9 @@ async fn main() {
         } else if error_msg.contains("address") || error_msg.contains("pubkey") {
             Output::hint("Public keys should be valid base58-encoded addresses");
         } else if error_msg.contains("network") || error_msg.contains("URL") {
-            Output::hint("Network URLs should start with https:// (e.g., https://api.devnet.solana.com)");
+            Output::hint(
+                "Network URLs should start with https:// (e.g., https://api.devnet.solana.com)",
+            );
         } else if error_msg.contains("threshold") {
             Output::hint("Threshold must be a positive number not exceeding member count");
         }
@@ -133,25 +134,24 @@ async fn handle_command(command: Commands) -> Result<()> {
             signers: _,
             keypair,
         } => {
-            let threshold_option = threshold.map(|t| {
-                if t == 0 {
-                    println!(
-                        "{} Threshold cannot be 0, will prompt later",
-                        "⚠️".bright_yellow()
-                    );
-                    None
-                } else {
-                    Some(t as u16)
-                }
-            }).flatten();
+            let threshold_option = threshold
+                .map(|t| {
+                    if t == 0 {
+                        println!(
+                            "{} Threshold cannot be 0, will prompt later",
+                            "⚠️".bright_yellow()
+                        );
+                        None
+                    } else {
+                        Some(t as u16)
+                    }
+                })
+                .flatten();
 
             create_command(&mut config, threshold_option, vec![], keypair).await
         }
-        Commands::Show { address } => {
-            show_command(&config, address).await
-        }
+        Commands::Show { address } => show_command(&config, address).await,
         Commands::Interactive => interactive_mode().await,
         Commands::Config => config_command(&config).await,
     }
 }
-

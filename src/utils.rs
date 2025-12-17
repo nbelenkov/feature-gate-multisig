@@ -115,14 +115,6 @@ pub fn parse_saved_members(config: &Config) -> Vec<Member> {
     parsed_members
 }
 
-pub fn parse_saved_threshold(config: &Config) -> Option<u16> {
-    if config.threshold > 0 {
-        Some(config.threshold)
-    } else {
-        None
-    }
-}
-
 pub fn collect_members_interactively() -> Result<Vec<Member>> {
     let mut interactive_members = Vec::new();
 
@@ -212,49 +204,6 @@ pub fn expand_tilde_path(path: &str) -> Result<String> {
     }
 }
 
-pub fn load_fee_payer_keypair(
-    config: &Config,
-    keypair_path: Option<String>,
-) -> Result<Option<Keypair>> {
-    if let Some(path) = keypair_path {
-        let keypair = Keypair::read_from_file(&path)
-            .map_err(|e| eyre::eyre!("Failed to load keypair from {}: {}", path, e))?;
-        Ok(Some(keypair))
-    } else if let Some(path) = &config.fee_payer_path {
-        println!(
-            "{} Loading fee payer keypair from config: {}",
-            "💰".bright_blue(),
-            path.bright_white()
-        );
-        let keypair = Keypair::read_from_file(path)
-            .map_err(|e| eyre::eyre!("Failed to load keypair from config path {}: {}", path, e))?;
-        Ok(Some(keypair))
-    } else {
-        println!("{} No fee payer keypair provided", "⚠️".bright_yellow());
-        Ok(None)
-    }
-}
-
-// CLI input helpers
-pub fn prompt_for_threshold(config: &Config) -> Result<u16> {
-    loop {
-        let input = Text::new(&format!(
-            "Enter threshold (required signatures) [{}]:",
-            config.threshold
-        ))
-        .prompt()
-        .unwrap_or_default();
-
-        match validate_threshold(&input, 10, config.threshold) {
-            Ok(t) => return Ok(t),
-            Err(e) => {
-                println!("  {} {}", "❌".bright_red(), e.to_string().bright_red());
-                continue;
-            }
-        }
-    }
-}
-
 pub fn prompt_for_threshold_with_max(max_members: usize) -> Result<u16> {
     loop {
         let input = Text::new(&format!(
@@ -317,71 +266,6 @@ pub fn prompt_for_network(config: &Config) -> Result<String> {
             }
         }
     }
-}
-
-// Display functions
-pub fn display_final_configuration(
-    contributor_pubkey: &Pubkey,
-    create_key: &Pubkey,
-    fee_payer_keypair: &Option<Keypair>,
-    threshold: u16,
-    members: &[Member],
-) {
-    println!("\n{}", "📋 Final Configuration:".bright_yellow().bold());
-    println!(
-        "  {}: {}",
-        "Contributor public key".cyan(),
-        contributor_pubkey.to_string().bright_white()
-    );
-    println!(
-        "  {}: {}",
-        "Create key".cyan(),
-        create_key.to_string().bright_white()
-    );
-    if let Some(fee_payer) = fee_payer_keypair {
-        println!(
-            "  {}: {}",
-            "Fee payer".cyan(),
-            fee_payer.pubkey().to_string().bright_green()
-        );
-    } else {
-        println!(
-            "  {}: {} (same as contributor)",
-            "Fee payer".cyan(),
-            contributor_pubkey.to_string().bright_yellow()
-        );
-    }
-    println!(
-        "  {}: {}",
-        "Threshold".cyan(),
-        threshold.to_string().bright_green()
-    );
-
-    println!("\n{}", "👥 All Members:".bright_yellow().bold());
-    println!(
-        "  {} Contributor: {} ({})",
-        "✓".bright_green(),
-        contributor_pubkey.to_string().bright_white(),
-        "Initiate".bright_cyan()
-    );
-
-    for (i, member) in members.iter().skip(1).enumerate() {
-        let perms = decode_permissions(member.permissions.mask);
-        println!(
-            "  {} Member {}: {} ({})",
-            "✓".bright_green(),
-            i + 1,
-            member.key.to_string().bright_white(),
-            perms.join(", ").bright_cyan()
-        );
-    }
-
-    println!(
-        "\n{} {}",
-        "📊 Total members:".bright_yellow().bold(),
-        members.len().to_string().bright_green()
-    );
-    println!();
 }
 
 /// Build a TransactionMessage for a parent multisig to approve a child's proposal.
@@ -472,77 +356,6 @@ pub fn create_child_vote_approve_transaction_message(
         instructions: SmallVec::from(vec![compiled]),
         address_table_lookups: SmallVec::from(vec![]),
     }
-}
-
-pub fn display_deployment_info(
-    network_index: usize,
-    total_networks: usize,
-    rpc_url: &str,
-    create_key: &Pubkey,
-    contributor_pubkey: &Pubkey,
-    multisig_address: &Pubkey,
-    vault_address: &Pubkey,
-    members: &[Member],
-) {
-    if total_networks > 1 {
-        println!(
-            "\n{} Deployment {} of {} to: {}",
-            "📡".bright_blue(),
-            (network_index + 1).to_string().bright_green(),
-            total_networks.to_string().bright_green(),
-            rpc_url.bright_white()
-        );
-    } else {
-        println!(
-            "\n{} {}",
-            "🌐 Deploying to:".bright_blue().bold(),
-            rpc_url.bright_white()
-        );
-    }
-
-    println!(
-        "{}",
-        "📦 All public keys for this deployment:"
-            .bright_yellow()
-            .bold()
-    );
-
-    println!(
-        "  {}: {}",
-        "Create key".cyan(),
-        create_key.to_string().bright_white()
-    );
-    println!(
-        "  {}: {}",
-        "Contributor".cyan(),
-        contributor_pubkey.to_string().bright_white()
-    );
-    println!(
-        "  {}: {}",
-        "Multisig PDA".cyan(),
-        multisig_address.to_string().bright_green()
-    );
-    println!(
-        "  {}: {}",
-        "Vault PDA (index 0)".cyan(),
-        vault_address.to_string().bright_green()
-    );
-
-    for (i, member) in members.iter().enumerate() {
-        let perms = decode_permissions(member.permissions.mask);
-        let label = if member.key == *contributor_pubkey {
-            "Contributor".to_string()
-        } else {
-            format!("Member {}", i)
-        };
-        println!(
-            "  {}: {} ({})",
-            label.cyan(),
-            member.key.to_string().bright_white(),
-            perms.join(", ").bright_cyan()
-        );
-    }
-    println!();
 }
 
 // Transaction creation functions
@@ -923,14 +736,6 @@ impl Display for TransactionEncoding {
             }
         )
     }
-}
-pub fn choose_transaction_encoding() -> Result<TransactionEncoding> {
-    let choice = Select::new(
-        "Transaction encoding format?",
-        vec![TransactionEncoding::Base58, TransactionEncoding::Base64],
-    )
-    .prompt()?;
-    Ok(choice)
 }
 
 pub fn choose_network_from_config(config: &Config) -> Result<String> {
