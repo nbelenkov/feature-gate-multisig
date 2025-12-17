@@ -7,8 +7,8 @@ This CLI tool enables the creation of feature gate multisigs across all Solana n
 The configuration file dictates the members and parent multisigs for the feature gate multisig to be created. The fee payer keypair is used to pay transaction fees and sets up the multisig configurations and proposals for a given feature gate.
 
 **Proposals are always created in the following order:**
-1. **Feature Activation Proposal** (Index 0)
-2. **Feature Activation Revocation Proposal** (Index 1)
+1. **Feature Activation Proposal** (Index 1)
+2. **Feature Activation Revocation Proposal** (Index 2)
 
 Once a feature gate multisig has been created, the CLI exposes transaction generation functionality to enable voting on either proposal and executing them when the threshold is met.
 
