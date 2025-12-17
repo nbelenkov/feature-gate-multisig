@@ -1,9 +1,13 @@
 use crate::constants::*;
-use crate::squads::{get_vault_pda, get_transaction_pda, get_proposal_pda, Multisig, VaultTransaction, Proposal, ProposalStatus};
-use crate::provision::{get_account_data_with_retry, create_rpc_client};
+use crate::provision::{create_rpc_client, get_account_data_with_retry};
+use crate::squads::{
+    get_proposal_pda, get_transaction_pda, get_vault_pda, Multisig, Proposal, ProposalStatus,
+    VaultTransaction,
+};
 use crate::utils::*;
-use eyre::Result;
 use colored::*;
+use eyre::Result;
+use inquire::Select;
 use solana_client::rpc_client::RpcClient;
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
@@ -31,8 +35,8 @@ pub async fn show_command(config: &Config, address: Option<String>) -> Result<()
 
 async fn show_multisig(config: &Config, address: &str) -> Result<()> {
     // Parse the multisig address
-    let multisig_pubkey = Pubkey::from_str(address)
-        .map_err(|_| eyre::eyre!("Invalid multisig address format"))?;
+    let multisig_pubkey =
+        Pubkey::from_str(address).map_err(|_| eyre::eyre!("Invalid multisig address format"))?;
 
     println!(
         "{}",
@@ -51,34 +55,27 @@ async fn show_multisig(config: &Config, address: &str) -> Result<()> {
         vec![DEFAULT_DEVNET_URL.to_string()]
     };
 
-    println!("Available networks to search:");
-    for (i, network) in networks_to_try.iter().enumerate() {
-        println!("  {}: {}", i + 1, network);
-    }
-    println!();
+    let rpc_url: String =
+        Select::new("Which network would you like to query?", networks_to_try).prompt()?;
 
-    for rpc_url in &networks_to_try {
-        println!("🌐 Trying network: {}", rpc_url.bright_white());
+    println!("🌐 Trying network: {}", rpc_url.bright_white());
 
-        let rpc_client = create_rpc_client(rpc_url);
-        match get_account_data_with_retry(&rpc_client, &multisig_pubkey) {
-            Ok(data) => {
-                println!("✅ Found account on: {}", rpc_url.bright_green());
-                account_data = Some(data);
-                successful_rpc_url = Some(rpc_url.clone());
-                break;
-            }
-            Err(e) => {
-                let error_str = e.to_string();
-                if error_str.contains("AccountNotFound")
-                    || error_str.contains("could not find account")
-                {
-                    println!("❌ Account not found on: {}", rpc_url.bright_red());
-                    last_error = Some(format!("Account not found: {}. This address may not exist on any of the configured networks or may not be a multisig account.", multisig_pubkey));
-                } else {
-                    println!("❌ Error querying {}: {}", rpc_url.bright_red(), e);
-                    last_error = Some(format!("Failed to query networks: {}", e));
-                }
+    let rpc_client = create_rpc_client(&rpc_url);
+    match get_account_data_with_retry(&rpc_client, &multisig_pubkey) {
+        Ok(data) => {
+            println!("✅ Found account on: {}", rpc_url.bright_green());
+            account_data = Some(data);
+            successful_rpc_url = Some(rpc_url.clone());
+        }
+        Err(e) => {
+            let error_str = e.to_string();
+            if error_str.contains("AccountNotFound") || error_str.contains("could not find account")
+            {
+                println!("❌ Account not found on: {}", rpc_url.bright_red());
+                last_error = Some(format!("Account not found: {}. This address may not exist on any of the configured networks or may not be a multisig account.", multisig_pubkey));
+            } else {
+                println!("❌ Error querying {}: {}", rpc_url.bright_red(), e);
+                last_error = Some(format!("Failed to query networks: {}", e));
             }
         }
     }
@@ -104,9 +101,7 @@ async fn show_multisig(config: &Config, address: &str) -> Result<()> {
     println!();
 
     if account_data.len() < 8 {
-        return Err(eyre::eyre!(
-            "Account data too small to be a valid multisig"
-        ));
+        return Err(eyre::eyre!("Account data too small to be a valid multisig"));
     }
 
     println!("📊 Account data length: {} bytes", account_data.len());
@@ -167,10 +162,15 @@ fn display_multisig_details(multisig: &Multisig, address: &Pubkey) -> Result<()>
         MultisigInfo {
             property: "Threshold".to_string(),
             value: {
-                let voting_members_count = multisig.members.iter()
+                let voting_members_count = multisig
+                    .members
+                    .iter()
                     .filter(|member| member.permissions.mask & 2 != 0) // Check Vote permission (bit 1)
                     .count();
-                format!("{} of {} voting members", multisig.threshold, voting_members_count)
+                format!(
+                    "{} of {} voting members",
+                    multisig.threshold, voting_members_count
+                )
             },
         },
         MultisigInfo {
@@ -308,21 +308,24 @@ async fn fetch_and_display_transactions_and_proposals(
         return Ok(());
     }
 
-    println!(
-        "🔍 Fetching transaction and proposal data for indices 1 and 2..."
-    );
+    println!("🔍 Fetching transaction and proposal data for indices 1 and 2...");
     println!();
 
     // Fetch data for indices 1 and 2
     for tx_index in 1..=2u64 {
         if tx_index > multisig.transaction_index {
-            println!("Transaction index {} not yet created (current max: {})", tx_index, multisig.transaction_index);
+            println!(
+                "Transaction index {} not yet created (current max: {})",
+                tx_index, multisig.transaction_index
+            );
             continue;
         }
 
         println!(
             "{}",
-            format!("📋 TRANSACTION INDEX {}", tx_index).bright_cyan().bold()
+            format!("📋 TRANSACTION INDEX {}", tx_index)
+                .bright_cyan()
+                .bold()
         );
         println!("{}", "─".repeat(50).bright_cyan());
 
@@ -330,23 +333,37 @@ async fn fetch_and_display_transactions_and_proposals(
         let (transaction_pda, _) = get_transaction_pda(multisig_pubkey, tx_index, None);
         let (proposal_pda, _) = get_proposal_pda(multisig_pubkey, tx_index, None);
 
-        println!("🎯 Transaction PDA: {}", transaction_pda.to_string().bright_white());
-        println!("🎯 Proposal PDA: {}", proposal_pda.to_string().bright_white());
+        println!(
+            "🎯 Transaction PDA: {}",
+            transaction_pda.to_string().bright_white()
+        );
+        println!(
+            "🎯 Proposal PDA: {}",
+            proposal_pda.to_string().bright_white()
+        );
         println!();
 
         // Fetch transaction account
         match fetch_and_display_transaction(rpc_client, &transaction_pda, tx_index).await {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
-                println!("❌ Failed to fetch transaction {}: {}", tx_index, e.to_string().bright_red());
+                println!(
+                    "❌ Failed to fetch transaction {}: {}",
+                    tx_index,
+                    e.to_string().bright_red()
+                );
             }
         }
 
-        // Fetch proposal account  
+        // Fetch proposal account
         match fetch_and_display_proposal(rpc_client, &proposal_pda, tx_index).await {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
-                println!("❌ Failed to fetch proposal {}: {}", tx_index, e.to_string().bright_red());
+                println!(
+                    "❌ Failed to fetch proposal {}: {}",
+                    tx_index,
+                    e.to_string().bright_red()
+                );
             }
         }
 
@@ -381,13 +398,14 @@ async fn fetch_and_display_transaction(
     }
 
     // Deserialize the VaultTransaction
-    let transaction: VaultTransaction = match borsh::BorshDeserialize::deserialize(&mut &account_data[8..]) {
-        Ok(tx) => tx,
-        Err(e) => {
-            println!("  ❌ Failed to deserialize transaction: {}", e);
-            return Ok(());
-        }
-    };
+    let transaction: VaultTransaction =
+        match borsh::BorshDeserialize::deserialize(&mut &account_data[8..]) {
+            Ok(tx) => tx,
+            Err(e) => {
+                println!("  ❌ Failed to deserialize transaction: {}", e);
+                return Ok(());
+            }
+        };
 
     // Display transaction details in a table
     #[derive(Tabled)]
@@ -436,7 +454,7 @@ async fn fetch_and_display_transaction(
     // Display transaction message details
     println!();
     println!("📋 Transaction Message Details:");
-    
+
     #[derive(Tabled)]
     struct MessageInfo {
         #[tabled(rename = "Property")]
@@ -480,7 +498,7 @@ async fn fetch_and_display_transaction(
     if !transaction.message.instructions.is_empty() {
         println!();
         println!("📋 Instructions Details:");
-        
+
         #[derive(Tabled)]
         struct InstructionDetails {
             #[tabled(rename = "Instruction #")]
@@ -493,12 +511,18 @@ async fn fetch_and_display_transaction(
             data: String,
         }
 
-        let instruction_details: Vec<InstructionDetails> = transaction.message.instructions.iter()
+        let instruction_details: Vec<InstructionDetails> = transaction
+            .message
+            .instructions
+            .iter()
             .enumerate()
             .map(|(i, instruction)| {
                 // Get the program ID from account_keys
-                let program_id = if (instruction.program_id_index as usize) < transaction.message.account_keys.len() {
-                    transaction.message.account_keys[instruction.program_id_index as usize].to_string()
+                let program_id = if (instruction.program_id_index as usize)
+                    < transaction.message.account_keys.len()
+                {
+                    transaction.message.account_keys[instruction.program_id_index as usize]
+                        .to_string()
                 } else {
                     format!("Invalid index ({})", instruction.program_id_index)
                 };
@@ -507,11 +531,17 @@ async fn fetch_and_display_transaction(
                 let accounts_info = if instruction.account_indexes.is_empty() {
                     "None".to_string()
                 } else {
-                    instruction.account_indexes.iter()
+                    instruction
+                        .account_indexes
+                        .iter()
                         .map(|&account_idx| {
                             if (account_idx as usize) < transaction.message.account_keys.len() {
-                                format!("{}:{}", account_idx, 
-                                    &transaction.message.account_keys[account_idx as usize].to_string()[..8])
+                                format!(
+                                    "{}:{}",
+                                    account_idx,
+                                    &transaction.message.account_keys[account_idx as usize]
+                                        .to_string()[..8]
+                                )
                             } else {
                                 format!("{}:Invalid", account_idx)
                             }
@@ -525,13 +555,17 @@ async fn fetch_and_display_transaction(
                     "Empty".to_string()
                 } else if instruction.data.len() <= 32 {
                     // Show full data for small instructions
-                    instruction.data.iter()
+                    instruction
+                        .data
+                        .iter()
                         .map(|b| format!("{:02x}", b))
                         .collect::<Vec<_>>()
                         .join(" ")
                 } else {
                     // Show first 16 bytes + length for large instructions
-                    let preview = instruction.data.iter()
+                    let preview = instruction
+                        .data
+                        .iter()
                         .take(16)
                         .map(|b| format!("{:02x}", b))
                         .collect::<Vec<_>>()
@@ -556,7 +590,7 @@ async fn fetch_and_display_transaction(
         if !transaction.message.account_keys.is_empty() {
             println!();
             println!("🔑 Account Keys Reference:");
-            
+
             #[derive(Tabled)]
             struct AccountKeyInfo {
                 #[tabled(rename = "Index")]
@@ -567,7 +601,10 @@ async fn fetch_and_display_transaction(
                 role: String,
             }
 
-            let account_key_info: Vec<AccountKeyInfo> = transaction.message.account_keys.iter()
+            let account_key_info: Vec<AccountKeyInfo> = transaction
+                .message
+                .account_keys
+                .iter()
                 .enumerate()
                 .map(|(i, pubkey)| {
                     let role = if i < transaction.message.num_signers as usize {
@@ -576,7 +613,11 @@ async fn fetch_and_display_transaction(
                         } else {
                             "Read-only Signer"
                         }
-                    } else if i < (transaction.message.num_signers + transaction.message.num_writable_non_signers) as usize {
+                    } else if i
+                        < (transaction.message.num_signers
+                            + transaction.message.num_writable_non_signers)
+                            as usize
+                    {
                         "Writable Non-signer"
                     } else {
                         "Read-only Non-signer"
@@ -691,7 +732,10 @@ async fn fetch_and_display_proposal(
     println!("{}", proposal_table);
 
     // Display voting details if there are votes
-    if !proposal.approved.is_empty() || !proposal.rejected.is_empty() || !proposal.cancelled.is_empty() {
+    if !proposal.approved.is_empty()
+        || !proposal.rejected.is_empty()
+        || !proposal.cancelled.is_empty()
+    {
         println!();
         println!("🗳️  Voting Details:");
 
