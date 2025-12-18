@@ -1,7 +1,8 @@
 use crate::commands::{
-    approve_feature_gate_activation_proposal, approve_feature_gate_activation_revocation_proposal,
-    config_command, create_command, execute_feature_gate_activation_proposal,
-    execute_feature_gate_revocation_proposal, show_command,
+    approve_common_config_change, approve_common_feature_gate_proposal, config_command,
+    create_command, execute_common_config_change, execute_common_feature_gate_proposal,
+    reject_common_feature_gate_proposal, rekey_multisig_feature_gate, show_command,
+    TransactionKind,
 };
 use crate::squads::get_vault_pda;
 use crate::utils::*;
@@ -16,7 +17,7 @@ pub async fn interactive_mode() -> Result<()> {
             "Create new feature gate multisig",
             "Show feature gate multisig details",
             "Show configuration",
-            "Approve/Execute Feature Gate Proposals (transactions are submited on-chain)",
+            "Proposal Actions (Approve/Reject/Execute)",
             "Exit",
         ];
 
@@ -29,100 +30,8 @@ pub async fn interactive_mode() -> Result<()> {
                 let feepayer_path = prompt_for_fee_payer_path(&config)?;
                 create_command(&mut config, None, vec![], Some(feepayer_path)).await?;
             }
-            "Approve/Execute Feature Gate Proposals (transactions are submited on-chain)" => {
-                let feature_gate_multisig_address =
-                    prompt_for_pubkey("Enter the feature gate multisig address:")?;
-                let feature_gate_id = get_vault_pda(&feature_gate_multisig_address, 0, None).0;
-                let fee_payer_path = prompt_for_fee_payer_path(&config)?;
-
-                let options = vec![
-                    "Approve feature gate activation proposal",
-                    "Approve feature gate activation revocation proposal",
-                    "Execute feature gate activation proposal",
-                    "Execute feature gate revocation proposal",
-                    "Exit",
-                ];
-                let choice: &str = Select::new("What would you like to do?", options).prompt()?;
-                match choice {
-                    "Approve feature gate activation proposal" => {
-                        Confirm::new(&format!(
-                            "You're approving the activation of the following feature gate: {}?",
-                            feature_gate_id
-                        ))
-                        .with_default(true)
-                        .prompt()?;
-                        let voting_key = prompt_for_pubkey(
-                            "Enter the voting key: (Can be either EOA or parent multisig)",
-                        )?;
-                        approve_feature_gate_activation_proposal(
-                            &config,
-                            feature_gate_multisig_address,
-                            voting_key,
-                            fee_payer_path,
-                            None,
-                        )
-                        .await?;
-                    }
-                    "Approve feature gate activation revocation proposal" => {
-                        Confirm::new(&format!(
-                            "You're approving the activation revocation of the following feature gate: {}?",
-                            feature_gate_id
-                        ))
-                        .with_default(true)
-                        .prompt()?;
-                        let voting_key = prompt_for_pubkey(
-                            "Enter the voting key: (Can be either EOA or parent multisig)",
-                        )?;
-                        approve_feature_gate_activation_revocation_proposal(
-                            &config,
-                            feature_gate_multisig_address,
-                            voting_key,
-                            fee_payer_path,
-                            None,
-                        )
-                        .await?;
-                    }
-                    "Execute feature gate activation proposal" => {
-                        Confirm::new(&format!(
-                            "You're executing the activation of the following feature gate: {}?",
-                            feature_gate_id
-                        ))
-                        .with_default(true)
-                        .prompt()?;
-                        let voting_key = prompt_for_pubkey(
-                            "Enter the voting key: (Can be either EOA or parent multisig)",
-                        )?;
-                        execute_feature_gate_activation_proposal(
-                            &config,
-                            feature_gate_multisig_address,
-                            voting_key,
-                            fee_payer_path,
-                            None,
-                        )
-                        .await?;
-                    }
-                    "Execute feature gate revocation proposal" => {
-                        Confirm::new(&format!(
-                            "You're executing the activation of the following feature gate: {}?",
-                            feature_gate_id
-                        ))
-                        .with_default(true)
-                        .prompt()?;
-                        let voting_key = prompt_for_pubkey(
-                            "Enter the voting key: (Can be either EOA or parent multisig)",
-                        )?;
-                        execute_feature_gate_revocation_proposal(
-                            &config,
-                            feature_gate_multisig_address,
-                            voting_key,
-                            fee_payer_path,
-                            None,
-                        )
-                        .await?;
-                    }
-                    "Exit" => break,
-                    _ => unreachable!(),
-                }
+            "Proposal Actions (Approve/Reject/Execute)" => {
+                handle_proposal_action(&config).await?;
             }
             "Show feature gate multisig details" => {
                 let address = Text::new("Enter the main multisig address:").prompt()?;
@@ -136,6 +45,172 @@ pub async fn interactive_mode() -> Result<()> {
         }
 
         println!("\n");
+    }
+
+    Ok(())
+}
+
+async fn handle_proposal_action(config: &Config) -> Result<()> {
+    // Collect common inputs
+    let feature_gate_multisig_address =
+        prompt_for_pubkey("Enter the feature gate multisig address:")?;
+    let feature_gate_id = get_vault_pda(&feature_gate_multisig_address, 0, None).0;
+    let fee_payer_path = prompt_for_fee_payer_path(config)?;
+    let voting_key =
+        prompt_for_pubkey("Enter the voting key: (Can be either EOA or parent multisig)")?;
+
+    // Select transaction type
+    let type_options = vec![
+        "Activate Feature Gate",
+        "Revoke Feature Gate",
+        "Rekey Multisig",
+        "Cancel",
+    ];
+    let type_choice: &str = Select::new("Select transaction type:", type_options).prompt()?;
+
+    if type_choice == "Cancel" {
+        return Ok(());
+    }
+
+    enum ProposalCategory {
+        FeatureGate(TransactionKind),
+        Rekey,
+    }
+
+    let category = match type_choice {
+        "Activate Feature Gate" => ProposalCategory::FeatureGate(TransactionKind::Activate),
+        "Revoke Feature Gate" => ProposalCategory::FeatureGate(TransactionKind::Revoke),
+        "Rekey Multisig" => ProposalCategory::Rekey,
+        _ => unreachable!(),
+    };
+
+    // Select action
+    let action_options = match category {
+        ProposalCategory::FeatureGate(_) => vec!["Approve", "Reject", "Execute", "Cancel"],
+        ProposalCategory::Rekey => vec!["Create", "Approve", "Execute", "Cancel"],
+    };
+    let action_choice: &str = Select::new("Select action:", action_options).prompt()?;
+
+    if action_choice == "Cancel" {
+        return Ok(());
+    }
+
+    match category {
+        ProposalCategory::FeatureGate(kind) => {
+            let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
+            let proposal_index: u64 = proposal_index_str
+                .parse()
+                .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+
+            Confirm::new(&format!(
+                "You're {}ing the {} of feature gate {} at proposal index {}. Continue?",
+                action_choice.to_lowercase(),
+                type_choice.to_lowercase(),
+                feature_gate_id,
+                proposal_index
+            ))
+            .with_default(true)
+            .prompt()?;
+
+            match action_choice {
+                "Approve" => {
+                    approve_common_feature_gate_proposal(
+                        config,
+                        feature_gate_multisig_address,
+                        voting_key,
+                        fee_payer_path,
+                        None,
+                        proposal_index,
+                        kind,
+                    )
+                    .await?;
+                }
+                "Reject" => {
+                    reject_common_feature_gate_proposal(
+                        config,
+                        feature_gate_multisig_address,
+                        voting_key,
+                        fee_payer_path,
+                        None,
+                        proposal_index,
+                        kind,
+                    )
+                    .await?;
+                }
+                "Execute" => {
+                    execute_common_feature_gate_proposal(
+                        config,
+                        feature_gate_multisig_address,
+                        voting_key,
+                        fee_payer_path,
+                        None,
+                        proposal_index,
+                        kind,
+                    )
+                    .await?;
+                }
+                _ => unreachable!(),
+            }
+        }
+        ProposalCategory::Rekey => match action_choice {
+            "Create" => {
+                rekey_multisig_feature_gate(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                )
+                .await?;
+            }
+            "Approve" => {
+                let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
+                let proposal_index: u64 = proposal_index_str
+                    .parse()
+                    .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+
+                Confirm::new(&format!(
+                    "You're approving the rekey proposal at index {}. Continue?",
+                    proposal_index
+                ))
+                .with_default(true)
+                .prompt()?;
+
+                approve_common_config_change(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                    proposal_index,
+                )
+                .await?;
+            }
+            "Execute" => {
+                let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
+                let proposal_index: u64 = proposal_index_str
+                    .parse()
+                    .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+
+                Confirm::new(&format!(
+                    "You're executing the rekey proposal at index {}. Continue?",
+                    proposal_index
+                ))
+                .with_default(true)
+                .prompt()?;
+
+                execute_common_config_change(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                    proposal_index,
+                )
+                .await?;
+            }
+            _ => unreachable!(),
+        },
     }
 
     Ok(())

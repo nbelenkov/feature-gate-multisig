@@ -306,54 +306,79 @@ pub fn create_child_vote_approve_transaction_message(
         accounts.to_account_metas(),
     );
 
-    // Compile to our TransactionMessage format
-    // Order matters for writability: after signer(s), the first `num_writable_non_signers`
-    // are considered writable. We need the child proposal to be writable for Approve.
-    let mut account_keys = vec![
-        parent_member_pubkey,       // 0: signer (parent vault PDA)
-        proposal_pda,               // 1: non-signer (writable)
-        child_multisig,             // 2: non-signer (readonly)
-        SQUADS_MULTISIG_PROGRAM_ID, // 3: program id
-    ];
-
-    // program_id_index for instruction
-    let program_id_index = account_keys
-        .iter()
-        .position(|k| *k == ix.program_id)
-        .unwrap_or_else(|| {
-            account_keys.push(ix.program_id);
-            account_keys.len() - 1
-        }) as u8;
-
-    // Map metas to indices
-    let account_indexes: Vec<u8> = ix
-        .accounts
-        .iter()
-        .map(|meta| {
-            account_keys
-                .iter()
-                .position(|k| *k == meta.pubkey)
-                .unwrap_or_else(|| {
-                    account_keys.push(meta.pubkey);
-                    account_keys.len() - 1
-                }) as u8
-        })
-        .collect();
-
-    let compiled = crate::squads::CompiledInstruction {
-        program_id_index,
-        account_indexes: SmallVec::from(account_indexes),
-        data: SmallVec::from(ix.data),
-    };
-
+    // Fixed account structure for child approve:
+    // Account keys array: [parent_member, proposal, child_multisig, program]
+    // Instruction expects: [multisig=2, member=0, proposal=1]
     TransactionMessage {
-        // The first key (parent member) is a signer and writable, matching the child instruction metas
         num_signers: 1,
         num_writable_signers: 1,
-        // Mark the first non-signer (the proposal) as writable to satisfy Anchor's mut constraint
         num_writable_non_signers: 1,
-        account_keys: SmallVec::from(account_keys),
-        instructions: SmallVec::from(vec![compiled]),
+        account_keys: SmallVec::from(vec![
+            parent_member_pubkey,
+            proposal_pda,
+            child_multisig,
+            SQUADS_MULTISIG_PROGRAM_ID,
+        ]),
+        instructions: SmallVec::from(vec![CompiledInstruction {
+            program_id_index: 3,
+            account_indexes: SmallVec::from(vec![2, 0, 1]), // [multisig, member, proposal]
+            data: SmallVec::from(ix.data),
+        }]),
+        address_table_lookups: SmallVec::from(vec![]),
+    }
+}
+
+/// Build a TransactionMessage for a parent multisig to reject a child's proposal.
+pub fn create_child_vote_reject_transaction_message(
+    child_multisig: Pubkey,
+    child_tx_index: u64,
+    parent_member_pubkey: Pubkey,
+) -> TransactionMessage {
+    use crate::squads::{
+        get_proposal_pda, MultisigRejectProposalData, MultisigVoteOnProposalAccounts,
+        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+    };
+    use solana_instruction::Instruction;
+
+    let (proposal_pda, _bump) = get_proposal_pda(
+        &child_multisig,
+        child_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+
+    let accounts = MultisigVoteOnProposalAccounts {
+        multisig: child_multisig,
+        member: parent_member_pubkey,
+        proposal: proposal_pda,
+    };
+    let data = MultisigRejectProposalData {
+        args: MultisigVoteOnProposalArgs { memo: None },
+    };
+
+    let ix = Instruction::new_with_bytes(
+        SQUADS_MULTISIG_PROGRAM_ID,
+        &data.data(),
+        accounts.to_account_metas(),
+    );
+
+    // Fixed account structure for child reject:
+    // Account keys array: [parent_member, proposal, child_multisig, program]
+    // Instruction expects: [multisig=2, member=0, proposal=1]
+    TransactionMessage {
+        num_signers: 1,
+        num_writable_signers: 0,
+        num_writable_non_signers: 1,
+        account_keys: SmallVec::from(vec![
+            parent_member_pubkey,
+            proposal_pda,
+            child_multisig,
+            SQUADS_MULTISIG_PROGRAM_ID,
+        ]),
+        instructions: SmallVec::from(vec![CompiledInstruction {
+            program_id_index: 3,
+            account_indexes: SmallVec::from(vec![2, 0, 1]), // [multisig, member, proposal]
+            data: SmallVec::from(ix.data),
+        }]),
         address_table_lookups: SmallVec::from(vec![]),
     }
 }

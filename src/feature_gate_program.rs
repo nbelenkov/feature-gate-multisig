@@ -1,14 +1,15 @@
-
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use solana_rent::Rent;
-use solana_system_interface::instruction::{transfer, allocate, assign};
+use solana_system_interface::instruction::{allocate, assign, transfer};
 
 /// The Feature Gate program ID
-pub const FEATURE_GATE_PROGRAM_ID: Pubkey = Pubkey::from_str_const("Feature111111111111111111111111111111111111");
+pub const FEATURE_GATE_PROGRAM_ID: Pubkey =
+    Pubkey::from_str_const("Feature111111111111111111111111111111111111");
 
 /// The incinerator program ID (used for burning lamports in revoke)
-pub const INCINERATOR_ID: Pubkey = Pubkey::from_str_const("1nc1nerator11111111111111111111111111111111");
+pub const INCINERATOR_ID: Pubkey =
+    Pubkey::from_str_const("1nc1nerator11111111111111111111111111111111");
 
 /// Size of a Feature account in bytes
 pub const FEATURE_ACCOUNT_SIZE: usize = 9;
@@ -28,9 +29,7 @@ impl Feature {
 
     /// Default Feature state (pending activation)
     pub fn default() -> Self {
-        Self {
-            activated_at: None,
-        }
+        Self { activated_at: None }
     }
 }
 
@@ -97,9 +96,7 @@ pub fn activate_feature_with_lamports(
 ///
 /// # Returns
 /// A vector of instructions to execute the feature activation
-pub fn activate_feature_funded(
-    feature_id: &Pubkey,
-) -> Vec<Instruction> {
+pub fn activate_feature_funded(feature_id: &Pubkey) -> Vec<Instruction> {
     vec![
         // Allocate space for the feature account
         allocate(feature_id, Feature::size_of() as u64),

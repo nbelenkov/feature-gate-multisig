@@ -1,13 +1,16 @@
-use crate::utils::*;
 use crate::output::Output;
+use crate::utils::*;
 use eyre::Result;
 
 pub async fn config_command(config: &Config) -> Result<()> {
     let config_path = get_config_path()?;
     let config_path_str = config_path.to_str().unwrap();
-    
+
     Output::header(&format!("📋 Configuration: {}", config_path_str));
-    Output::field("Saved members", &format!("{} members", config.members.len()));
+    Output::field(
+        "Saved members",
+        &format!("{} members", config.members.len()),
+    );
 
     if !config.members.is_empty() {
         for (i, member) in config.members.iter().enumerate() {
@@ -29,7 +32,10 @@ pub async fn config_command(config: &Config) -> Result<()> {
     // Display networks array if available, otherwise show legacy single network
     if !config.networks.is_empty() {
         Output::separator();
-        Output::field("Saved networks", &format!("{} networks", config.networks.len()));
+        Output::field(
+            "Saved networks",
+            &format!("{} networks", config.networks.len()),
+        );
         for (i, network) in config.networks.iter().enumerate() {
             Output::numbered_field(i + 1, "Network", network);
         }

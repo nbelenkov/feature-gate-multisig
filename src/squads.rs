@@ -15,6 +15,10 @@ pub const PROPOSAL_REJECT_DISCRIMINATOR: &[u8] = &[243, 62, 134, 156, 230, 106, 
 
 pub const EXECUTE_TRANSACTION_DISCRIMINATOR: &[u8] = &[194, 8, 161, 87, 153, 164, 25, 171];
 
+pub const CONFIG_TRANSACTION_CREATE_DISCRIMINATOR: &[u8] = &[155, 236, 87, 228, 137, 75, 81, 39];
+
+pub const CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR: &[u8] = &[114, 146, 244, 189, 252, 140, 36, 40];
+
 pub const SQUADS_MULTISIG_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf");
 
@@ -38,7 +42,7 @@ pub struct Multisig {
     pub members: Vec<Member>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Eq, PartialEq, Clone)]
+#[derive(BorshDeserialize, BorshSerialize, Eq, PartialEq, Clone, Debug)]
 pub struct Member {
     pub key: Pubkey,
     pub permissions: Permissions,
@@ -54,6 +58,13 @@ pub enum Permission {
 #[derive(BorshSerialize, BorshDeserialize, Eq, PartialEq, Clone, Copy, Default, Debug)]
 pub struct Permissions {
     pub mask: u8,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
+pub enum ConfigAction {
+    AddMember { new_member: Member },
+    RemoveMember { old_member: Pubkey },
+    ChangeThreshold { new_threshold: u16 },
 }
 
 pub const SEED_EPHEMERAL_SIGNER: &[u8] = b"ephemeral_signer";
@@ -339,6 +350,25 @@ pub struct MultisigCreateProposalArgs {
     pub is_draft: bool,
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct ConfigTransactionCreateArgs {
+    pub actions: Vec<ConfigAction>,
+    pub memo: Option<String>,
+}
+
+pub struct ConfigTransactionCreateData {
+    pub args: ConfigTransactionCreateArgs,
+}
+
+impl ConfigTransactionCreateData {
+    pub fn data(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(CONFIG_TRANSACTION_CREATE_DISCRIMINATOR);
+        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
+        data
+    }
+}
+
 pub struct MultisigVoteOnProposalAccounts {
     pub multisig: Pubkey,
     pub member: Pubkey,
@@ -351,6 +381,10 @@ pub struct MultisigVoteOnProposalArgs {
 }
 
 pub struct MultisigApproveProposalData {
+    pub args: MultisigVoteOnProposalArgs,
+}
+
+pub struct MultisigRejectProposalData {
     pub args: MultisigVoteOnProposalArgs,
 }
 
@@ -396,6 +430,15 @@ impl MultisigApproveProposalData {
     pub fn data(&self) -> Vec<u8> {
         let mut data = Vec::new();
         data.extend_from_slice(PROPOSAL_APPROVE_DISCRIMINATOR);
+        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
+        data
+    }
+}
+
+impl MultisigRejectProposalData {
+    pub fn data(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(PROPOSAL_REJECT_DISCRIMINATOR);
         data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
         data
     }
