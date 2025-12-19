@@ -1,8 +1,8 @@
 use crate::commands::{
     approve_common_config_change, approve_common_feature_gate_proposal, config_command,
-    create_command, execute_common_config_change, execute_common_feature_gate_proposal,
-    reject_common_feature_gate_proposal, rekey_multisig_feature_gate, show_command,
-    TransactionKind,
+    create_command, create_feature_gate_proposal, execute_common_config_change,
+    execute_common_feature_gate_proposal, reject_common_feature_gate_proposal,
+    rekey_multisig_feature_gate, show_command, TransactionKind,
 };
 use crate::squads::get_vault_pda;
 use crate::utils::*;
@@ -63,7 +63,7 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
     let type_options = vec![
         "Activate Feature Gate",
         "Revoke Feature Gate",
-        "Rekey Multisig",
+        "Rekey Multisig (this will brick the multisig)",
         "Cancel",
     ];
     let type_choice: &str = Select::new("Select transaction type:", type_options).prompt()?;
@@ -72,22 +72,18 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    enum ProposalCategory {
-        FeatureGate(TransactionKind),
-        Rekey,
-    }
-
-    let category = match type_choice {
-        "Activate Feature Gate" => ProposalCategory::FeatureGate(TransactionKind::Activate),
-        "Revoke Feature Gate" => ProposalCategory::FeatureGate(TransactionKind::Revoke),
-        "Rekey Multisig" => ProposalCategory::Rekey,
+    let kind = match type_choice {
+        "Activate Feature Gate" => TransactionKind::Activate,
+        "Revoke Feature Gate" => TransactionKind::Revoke,
+        "Rekey Multisig (this will brick the multisig)" => TransactionKind::Rekey,
         _ => unreachable!(),
     };
 
-    // Select action
-    let action_options = match category {
-        ProposalCategory::FeatureGate(_) => vec!["Approve", "Reject", "Execute", "Cancel"],
-        ProposalCategory::Rekey => vec!["Create", "Approve", "Execute", "Cancel"],
+    // Select action - Rekey has fewer actions (no Reject)
+    let action_options = if kind == TransactionKind::Rekey {
+        vec!["Create", "Approve", "Execute", "Cancel"]
+    } else {
+        vec!["Create", "Approve", "Reject", "Execute", "Cancel"]
     };
     let action_choice: &str = Select::new("Select action:", action_options).prompt()?;
 
@@ -95,80 +91,96 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    match category {
-        ProposalCategory::FeatureGate(kind) => {
-            let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
-            let proposal_index: u64 = proposal_index_str
-                .parse()
-                .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
-
-            Confirm::new(&format!(
-                "You're {}ing the {} of feature gate {} at proposal index {}. Continue?",
-                action_choice.to_lowercase(),
-                type_choice.to_lowercase(),
-                feature_gate_id,
-                proposal_index
-            ))
-            .with_default(true)
-            .prompt()?;
-
-            match action_choice {
-                "Approve" => {
-                    approve_common_feature_gate_proposal(
-                        config,
-                        feature_gate_multisig_address,
-                        voting_key,
-                        fee_payer_path,
-                        None,
-                        proposal_index,
-                        kind,
-                    )
-                    .await?;
-                }
-                "Reject" => {
-                    reject_common_feature_gate_proposal(
-                        config,
-                        feature_gate_multisig_address,
-                        voting_key,
-                        fee_payer_path,
-                        None,
-                        proposal_index,
-                        kind,
-                    )
-                    .await?;
-                }
-                "Execute" => {
-                    execute_common_feature_gate_proposal(
-                        config,
-                        feature_gate_multisig_address,
-                        voting_key,
-                        fee_payer_path,
-                        None,
-                        proposal_index,
-                        kind,
-                    )
-                    .await?;
-                }
-                _ => unreachable!(),
-            }
+    if kind != TransactionKind::Rekey {
+        // Feature Gate operations (Activate/Revoke)
+        if action_choice == "Create" {
+            // For Create, we don't need proposal index - we're creating a new one
+            return create_feature_gate_proposal(
+                config,
+                feature_gate_multisig_address,
+                voting_key,
+                fee_payer_path,
+                None,
+                kind,
+            )
+            .await;
         }
-        ProposalCategory::Rekey => match action_choice {
-            "Create" => {
-                rekey_multisig_feature_gate(
+
+        let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
+        let proposal_index: u64 = proposal_index_str
+            .parse()
+            .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+
+        Confirm::new(&format!(
+            "You're {}ing the {} of feature gate {} at proposal index {}. Continue?",
+            action_choice.to_lowercase(),
+            type_choice.to_lowercase(),
+            feature_gate_id,
+            proposal_index
+        ))
+        .with_default(true)
+        .prompt()?;
+
+        match action_choice {
+            "Approve" => {
+                approve_common_feature_gate_proposal(
                     config,
                     feature_gate_multisig_address,
                     voting_key,
                     fee_payer_path,
                     None,
+                    proposal_index,
+                    kind,
                 )
                 .await?;
             }
-            "Approve" => {
-                let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
-                let proposal_index: u64 = proposal_index_str
-                    .parse()
-                    .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+            "Reject" => {
+                reject_common_feature_gate_proposal(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                    proposal_index,
+                    kind,
+                )
+                .await?;
+            }
+            "Execute" => {
+                execute_common_feature_gate_proposal(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                    proposal_index,
+                    kind,
+                )
+                .await?;
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        // Rekey operation
+        if action_choice == "Create" {
+            // Create does not require a proposal index
+            return rekey_multisig_feature_gate(
+                config,
+                feature_gate_multisig_address,
+                voting_key,
+                fee_payer_path,
+                None,
+            )
+            .await;
+        }
 
+        let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
+        let proposal_index: u64 = proposal_index_str
+            .parse()
+            .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
+
+        match action_choice {
+            "Approve" => {
                 Confirm::new(&format!(
                     "You're approving the rekey proposal at index {}. Continue?",
                     proposal_index
@@ -187,11 +199,6 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
                 .await?;
             }
             "Execute" => {
-                let proposal_index_str = Text::new("Enter the proposal index:").prompt()?;
-                let proposal_index: u64 = proposal_index_str
-                    .parse()
-                    .map_err(|_| eyre::eyre!("Invalid proposal index"))?;
-
                 Confirm::new(&format!(
                     "You're executing the rekey proposal at index {}. Continue?",
                     proposal_index
@@ -210,7 +217,7 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
                 .await?;
             }
             _ => unreachable!(),
-        },
+        }
     }
 
     Ok(())

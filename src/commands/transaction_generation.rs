@@ -4,6 +4,7 @@ use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
+use std::str::FromStr;
 
 use crate::squads::{get_vault_pda, Multisig as SquadsMultisig, TransactionMessage};
 use crate::{
@@ -336,6 +337,15 @@ async fn handle_parent_multisig_flow(
                 parent_vault_member,
             )
         }
+        (ProposalAction::Create, ChildTransactionFlavor::Vault, ParentFlowPayload::Create(msg)) => {
+            crate::provision::create_child_create_vault_transaction_and_proposal_message(
+                feature_gate_multisig_address,
+                proposal_index,
+                parent_vault_member,
+                fee_payer_signer.pubkey(),
+                msg,
+            )
+        }
         (ProposalAction::Create, _, ParentFlowPayload::Create(msg)) => msg,
         (ProposalAction::Execute, ChildTransactionFlavor::Vault, _) => {
             return Err(eyre::eyre!(
@@ -660,7 +670,12 @@ pub async fn execute_common_feature_gate_proposal(
         // Build execution account metas from the child transaction
         let mut child_execution_account_metas = Vec::new();
         for (i, account_key) in child_transaction_message.account_keys.iter().enumerate() {
-            let is_signer = i < child_transaction_message.num_signers as usize;
+            // Preserve writability but do NOT mark any of the child execution
+            // accounts as signers. The Squads program will derive the required
+            // signer PDA(s) from the stored transaction message, and marking
+            // them as signers in the outer Execute instruction confuses the
+            // account grouping (leading to InvalidAccount during CPI).
+            let is_signer = false;
             let is_writable = child_transaction_message.is_static_writable_index(i);
             if is_writable {
                 child_execution_account_metas.push(solana_instruction::AccountMeta::new(
@@ -743,6 +758,138 @@ pub async fn execute_common_feature_gate_proposal(
     let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
         .map_err(|e| eyre::eyre!("Failed to execute proposal: {}", e))?;
     output::Output::field("Proposal executed (sig):", &signature);
+    Ok(())
+}
+
+pub async fn create_feature_gate_proposal(
+    config: &Config,
+    feature_gate_multisig_address: Pubkey,
+    voting_key: Pubkey,
+    fee_payer_path: String,
+    program_id: Option<Pubkey>,
+    kind: TransactionKind,
+) -> Result<()> {
+    let program_id = program_id
+        .unwrap_or_else(|| Pubkey::from_str_const("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf"));
+
+    let fee_payer_signer =
+        signer_from_path(&Default::default(), &fee_payer_path, "fee payer", &mut None)
+            .map_err(|e| eyre::eyre!("Failed to load fee payer: {}", e))?;
+
+    let rpc_url = choose_network_from_config(config)?;
+    let rpc_client = create_rpc_client(&rpc_url);
+
+    // Fetch the feature gate multisig to get transaction index
+    let feature_gate_acc = rpc_client
+        .get_account(&feature_gate_multisig_address)
+        .map_err(|e| eyre::eyre!("Failed to fetch feature gate multisig: {}", e))?;
+
+    let feature_gate_ms: SquadsMultisig =
+        BorshDeserialize::deserialize(&mut &feature_gate_acc.data[8..])
+            .map_err(|e| eyre::eyre!("Failed to deserialize feature gate multisig: {}", e))?;
+
+    let next_tx_index = feature_gate_ms.transaction_index + 1;
+
+    // Feature ID is the child vault address (vault 0)
+    let feature_id = get_vault_pda(&feature_gate_multisig_address, 0, None).0;
+
+    // Detect if voting_key is itself a Squads multisig (parent)
+    let is_parent_multisig = load_multisig_if_any(&rpc_client, &voting_key)?.is_some();
+
+    output::Output::header(&format!("🎯 Create {} Proposal", kind.label()));
+    output::Output::field("Feature ID", &feature_id.to_string());
+    output::Output::field("Multisig", &feature_gate_multisig_address.to_string());
+    output::Output::field("Next Transaction Index", &next_tx_index.to_string());
+
+    if is_parent_multisig {
+        output::Output::info("Parent multisig detected - creating parent proposal");
+
+        let child_tx_message =
+            crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
+
+        return handle_parent_multisig_flow(
+            &program_id,
+            voting_key,
+            feature_gate_multisig_address,
+            next_tx_index,
+            kind,
+            ChildTransactionFlavor::Vault,
+            &fee_payer_signer,
+            &rpc_url,
+            ProposalAction::Create,
+            ParentFlowPayload::Create(child_tx_message),
+        )
+        .await;
+    }
+
+    // EOA voting path - create vault transaction and proposal
+    output::Output::info(&format!("Creating {} proposal...", kind.label()));
+
+    // Verify voting_key has Initiate permission
+    let is_member = feature_gate_ms.members.iter().any(|m| m.key == voting_key);
+    let has_initiate = feature_gate_ms
+        .members
+        .iter()
+        .find(|m| m.key == voting_key)
+        .map(|m| (m.permissions.mask & (1 << 0)) != 0)
+        .unwrap_or(false);
+
+    if !is_member {
+        output::Output::error("Creator key is not a member of the multisig.");
+        return Err(eyre::eyre!("Creator must be a multisig member"));
+    }
+    if !has_initiate {
+        output::Output::error("Creator key does not have Initiate permission.");
+        return Err(eyre::eyre!("Missing Initiate permission for creator"));
+    }
+
+    // Verify voting_key is the same as fee_payer in EOA mode
+    if voting_key != fee_payer_signer.pubkey() {
+        return Err(eyre::eyre!(
+            "In EOA mode, voting_key must match fee_payer. Got voting_key={}, fee_payer={}",
+            voting_key,
+            fee_payer_signer.pubkey()
+        ));
+    }
+
+    let tx_message =
+        crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
+
+    // Get fresh blockhash
+    let blockhash = rpc_client.get_latest_blockhash()?;
+
+    // Create transaction and proposal
+    let (message, tx_pda, proposal_pda) = create_transaction_and_proposal_message(
+        Some(&program_id),
+        &fee_payer_signer.pubkey(),
+        &voting_key,
+        &feature_gate_multisig_address,
+        next_tx_index,
+        0, // vault_index
+        tx_message,
+        Some(5000),
+        Some(crate::constants::DEFAULT_COMPUTE_UNITS),
+        blockhash,
+    )?;
+
+    output::Output::address("Transaction PDA:", &tx_pda.to_string());
+    output::Output::address("Proposal PDA:", &proposal_pda.to_string());
+
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::V0(message), &[fee_payer_signer.as_ref()])?;
+
+    let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
+        .map_err(|e| eyre::eyre!("Failed to create proposal: {}", e))?;
+
+    output::Output::field(
+        &format!("{} proposal created (sig):", kind.label()),
+        &signature,
+    );
+    output::Output::field("Proposal index:", &next_tx_index.to_string());
+
+    output::Output::info(
+        "Next step: Gather approvals from other members, then execute the proposal.",
+    );
     Ok(())
 }
 
