@@ -1,0 +1,7 @@
+name = "Feature Gate Multisig"
+
+[environments.local]
+network_id = "localnet"
+rpc_api_url = "http://localhost:8899"
+program_id = "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf"
+clone_from = "mainnet"

@@ -295,13 +295,16 @@ async fn handle_parent_multisig_flow(
         }
     };
 
-    if !Confirm::new(confirmation_prompt)
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false)
-    {
-        output::Output::info("Parent multisig proposal creation cancelled.");
-        return Ok(());
+    // Non-interactive mode for E2E tests - auto-confirm
+    if std::env::var("E2E_TEST_MODE").is_err() {
+        if !Confirm::new(confirmation_prompt)
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+        {
+            output::Output::info("Parent multisig proposal creation cancelled.");
+            return Ok(());
+        }
     }
 
     // Create the transaction message based on operation type
@@ -373,7 +376,7 @@ async fn handle_parent_multisig_flow(
         parent_next_index,
         0,
         tx_message,
-        Some(5000),
+        Some(crate::constants::DEFAULT_PRIORITY_FEE as u32),
         Some(crate::constants::DEFAULT_COMPUTE_UNITS),
         blockhash,
     )?;
@@ -392,11 +395,14 @@ async fn handle_parent_multisig_flow(
     output::Output::field("Signature:", &signature);
 
     // Offer to approve the parent proposal immediately
-    if Confirm::new("Approve this parent proposal now?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false)
-    {
+    // In E2E test mode, auto-approve
+    let should_approve = std::env::var("E2E_TEST_MODE").is_ok()
+        || Confirm::new("Approve this parent proposal now?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false);
+
+    if should_approve {
         let parent_proposal_index = parent_next_index;
         let approve_msg = create_parent_approve_proposal_message(
             program_id,
@@ -433,11 +439,14 @@ async fn handle_parent_multisig_flow(
             .unwrap_or(false);
 
         if approved as u16 >= threshold && is_fee_payer_member && has_execute_permission {
-            if Confirm::new("Execute this parent proposal now?")
-                .with_default(true)
-                .prompt()
-                .unwrap_or(false)
-            {
+            // Auto-execute in E2E test mode
+            let should_execute = std::env::var("E2E_TEST_MODE").is_ok()
+                || Confirm::new("Execute this parent proposal now?")
+                    .with_default(true)
+                    .prompt()
+                    .unwrap_or(false);
+
+            if should_execute {
                 let fresh_blockhash = rpc_client.get_latest_blockhash()?;
                 let exec_msg = create_execute_transaction_message(
                     program_id,
@@ -543,13 +552,20 @@ pub async fn reject_common_feature_gate_proposal(
     let is_parent_multisig = load_multisig_if_any(&rpc_client, &voting_key)?.is_some();
 
     if is_parent_multisig {
+        // Use Config flavor for Rekey, Vault flavor for Activate/Revoke
+        let child_flavor = if kind == TransactionKind::Rekey {
+            ChildTransactionFlavor::Config
+        } else {
+            ChildTransactionFlavor::Vault
+        };
+
         return handle_parent_multisig_flow(
             &program_id,
             voting_key,
             feature_gate_multisig_address,
             proposal_index,
             kind,
-            ChildTransactionFlavor::Vault,
+            child_flavor,
             &fee_payer_signer,
             &rpc_url,
             ProposalAction::Reject,
@@ -579,10 +595,14 @@ pub async fn reject_common_feature_gate_proposal(
         &[fee_payer_signer.as_ref()],
     )?;
 
-    let should_send = Confirm::new("Send this reject transaction now?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false);
+    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new("Send this reject transaction now?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+    };
     if !should_send {
         output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
         return Ok(());
@@ -867,7 +887,7 @@ pub async fn create_feature_gate_proposal(
         next_tx_index,
         0, // vault_index
         tx_message,
-        Some(5000),
+        Some(crate::constants::DEFAULT_PRIORITY_FEE as u32),
         Some(crate::constants::DEFAULT_COMPUTE_UNITS),
         blockhash,
     )?;
@@ -943,14 +963,16 @@ pub async fn rekey_multisig_feature_gate(
     }
 
     // Final confirmation
-    let confirm =
-        Confirm::new("This will permanently disable voting on this multisig. Are you sure?")
-            .with_default(false)
-            .prompt()?;
+    if std::env::var("E2E_TEST_MODE").is_err() {
+        let confirm =
+            Confirm::new("This will permanently disable voting on this multisig. Are you sure?")
+                .with_default(false)
+                .prompt()?;
 
-    if !confirm {
-        output::Output::hint("Rekey cancelled.");
-        return Ok(());
+        if !confirm {
+            output::Output::hint("Rekey cancelled.");
+            return Ok(());
+        }
     }
 
     // Fetch next transaction index (child)
@@ -1219,10 +1241,14 @@ async fn approve_common_proposal(
         &[fee_payer_signer.as_ref()],
     )?;
 
-    let should_send = Confirm::new("Send this approve transaction now?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false);
+    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new("Send this approve transaction now?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+    };
     if !should_send {
         output::Output::hint(
             "Skipped sending. You can submit the above encoded transaction manually or rerun to send.",
@@ -1338,10 +1364,14 @@ pub async fn execute_common_config_change(
     )?;
 
     // Confirm before sending on-chain (EOA execute path)
-    let should_send = Confirm::new("Send this execute transaction now?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false);
+    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new("Send this execute transaction now?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+    };
     if !should_send {
         output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
         return Ok(());

@@ -23,8 +23,6 @@ pub async fn interactive_mode() -> Result<()> {
 
         let choice: &str = Select::new("What would you like to do?", options).prompt()?;
 
-        println!("In the current setup, only the fee payer keypair is used for transactions, hence for EOA voting fee payer = voting account. For multisig setup, the fee payer needs to be a member of the parent multisig.\n");
-
         match choice {
             "Create new feature gate multisig" => {
                 let feepayer_path = prompt_for_fee_payer_path(&config)?;
@@ -51,6 +49,8 @@ pub async fn interactive_mode() -> Result<()> {
 }
 
 async fn handle_proposal_action(config: &Config) -> Result<()> {
+    println!("In the current setup, only the fee payer keypair is used for transactions, hence for EOA voting fee payer = voting account. For multisig setup, the fee payer needs to be a member of the parent multisig.\n");
+
     // Collect common inputs
     let feature_gate_multisig_address =
         prompt_for_pubkey("Enter the feature gate multisig address:")?;
@@ -79,12 +79,8 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
         _ => unreachable!(),
     };
 
-    // Select action - Rekey has fewer actions (no Reject)
-    let action_options = if kind == TransactionKind::Rekey {
-        vec!["Create", "Approve", "Execute", "Cancel"]
-    } else {
-        vec!["Create", "Approve", "Reject", "Execute", "Cancel"]
-    };
+    // Select action - Rekey now supports Reject as well
+    let action_options = vec!["Create", "Approve", "Reject", "Execute", "Cancel"];
     let action_choice: &str = Select::new("Select action:", action_options).prompt()?;
 
     if action_choice == "Cancel" {
@@ -195,6 +191,25 @@ async fn handle_proposal_action(config: &Config) -> Result<()> {
                     fee_payer_path,
                     None,
                     proposal_index,
+                )
+                .await?;
+            }
+            "Reject" => {
+                Confirm::new(&format!(
+                    "You're rejecting the rekey proposal at index {}. Continue?",
+                    proposal_index
+                ))
+                .with_default(true)
+                .prompt()?;
+
+                reject_common_feature_gate_proposal(
+                    config,
+                    feature_gate_multisig_address,
+                    voting_key,
+                    fee_payer_path,
+                    None,
+                    proposal_index,
+                    TransactionKind::Rekey,
                 )
                 .await?;
             }

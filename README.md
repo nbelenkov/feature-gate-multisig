@@ -108,16 +108,38 @@ cargo test
 cargo test -- --nocapture
 ```
 
-## Testing setup
+## Testing setup e2e
 
-To test multisigs use `squads-multisig-cli` to spin up a multisig and add the PDA Vault as a member of the feature gate multisig.
-
+Install surfpool:
 ```bash
-multisig-create --rpc-url <RPC_URL> --program-id <PROGRAM_ID> --keypair <KEYPAIR_PATH> --config-authority <CONFIG_AUTHORITY> --members <MEMBER_1> <MEMBER_2> ... --threshold <THRESHOLD>
-
+curl -sL https://run.surfpool.run/ | bash
 ```
 
-see more info here https://docs.squads.so/main/development/cli/commands#multisig-create
+Or via Homebrew (macOS):
+```bash
+brew tap txtx/taps
+brew install txtx/taps/surfpool
+```
+
+### 2. Start Surfpool
+```bash
+make surfpool-start
+```
+Or manually:
+```bash
+surfpool start --no-tui
+```
+
+### 3. Run E2E Tests
+In a separate terminal:
+```bash
+RPC_URL=http://127.0.0.1:8899 cargo test rpc_e2e_ -- --ignored --nocapture
+```
+
+Or use the Makefile (starts surfpool in background, runs tests, then stops):
+```bash
+make test-surfpool
+```
 
 ## License
 

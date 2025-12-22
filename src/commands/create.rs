@@ -14,6 +14,19 @@ pub async fn create_command(
     _sub_multisigs: Vec<String>,
     keypair_path: Option<String>,
 ) -> Result<()> {
+    // Keep existing behaviour, but discard returned deployments
+    let _ =
+        create_command_with_deployments(config, threshold, _sub_multisigs, keypair_path).await?;
+    Ok(())
+}
+
+/// Variant of `create_command` that returns deployment details (used by E2E tests).
+pub async fn create_command_with_deployments(
+    config: &mut Config,
+    threshold: Option<u16>,
+    _sub_multisigs: Vec<String>,
+    keypair_path: Option<String>,
+) -> Result<Vec<DeploymentResult>> {
     println!(
         "{}",
         "🚀 Creating feature gate multisig configuration"
@@ -114,7 +127,7 @@ pub async fn create_command(
         );
     }
 
-    Ok(())
+    Ok(deployments)
 }
 
 async fn deploy_to_single_network(
@@ -147,7 +160,7 @@ async fn deploy_to_single_network(
         create_key,
         members.to_vec(),
         threshold,
-        Some(5000), // Priority fee
+        Some(crate::constants::DEFAULT_PRIORITY_FEE), // Priority fee
     )
     .await
     .map_err(|e| eyre::eyre!("Failed to create multisig: {}", e))?;

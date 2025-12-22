@@ -362,11 +362,11 @@ pub fn create_child_vote_reject_transaction_message(
     );
 
     // Fixed account structure for child reject:
-    // Account keys array: [parent_member, proposal, child_multisig, program]
+    // Account keys array: [parent_member (writable signer), proposal, child_multisig, program]
     // Instruction expects: [multisig=2, member=0, proposal=1]
     TransactionMessage {
         num_signers: 1,
-        num_writable_signers: 0,
+        num_writable_signers: 1, // member must be writable
         num_writable_non_signers: 1,
         account_keys: SmallVec::from(vec![
             parent_member_pubkey,
@@ -533,8 +533,8 @@ pub async fn create_and_send_transaction_proposal(
             transaction_index,
             0, // Vault index 0 (default vault for feature gates)
             transaction_message,
-            Some(5000),                  // Priority fee
-            Some(DEFAULT_COMPUTE_UNITS), // Compute unit limit
+            Some(DEFAULT_PRIORITY_FEE as u32), // Priority fee
+            Some(DEFAULT_COMPUTE_UNITS),       // Compute unit limit
             recent_blockhash,
         )
         .map_err(|e| eyre::eyre!("Failed to create transaction and proposal message: {}", e))?;
@@ -777,6 +777,12 @@ pub fn choose_network_from_config(config: &Config) -> Result<String> {
     if available_networks.is_empty() {
         return Err(eyre::eyre!("No networks available"));
     }
+
+    // Non-interactive mode for E2E tests
+    if std::env::var("E2E_TEST_MODE").is_ok() {
+        return Ok(available_networks[0].to_string());
+    }
+
     let choice = Select::new(
         "What network would you like to use for transaction generation?",
         available_networks,
@@ -821,9 +827,14 @@ pub fn choose_network_mode(config: &Config, use_saved_config: bool) -> Result<(b
             network.bright_white()
         );
     }
-    let use_saved_networks = Confirm::new("Use saved networks for deployment?")
-        .with_default(true)
-        .prompt()?;
+    // Auto-confirm in E2E test mode
+    let use_saved_networks = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new("Use saved networks for deployment?")
+            .with_default(true)
+            .prompt()?
+    };
 
     Ok((use_saved_networks, available_networks))
 }
@@ -893,9 +904,14 @@ pub fn review_config(config: &Config) -> Result<bool> {
     }
 
     println!();
-    let use_config = Confirm::new("Use these saved members and settings?")
-        .with_default(true)
-        .prompt()?;
+    // Auto-confirm in E2E test mode
+    let use_config = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new("Use these saved members and settings?")
+            .with_default(true)
+            .prompt()?
+    };
 
     Ok(use_config)
 }

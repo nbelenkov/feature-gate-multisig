@@ -2,3 +2,5 @@ target
 .idea
 target
 secret
+.surfpool/
+artifacts/

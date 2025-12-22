@@ -404,10 +404,14 @@ pub async fn create_multisig(
     );
     println!();
 
-    let proceed = Confirm::new()
-        .with_prompt("Do you want to proceed?")
-        .default(true)
-        .interact()?;
+    let proceed = if std::env::var("E2E_TEST_MODE").is_ok() {
+        true
+    } else {
+        Confirm::new()
+            .with_prompt("Do you want to proceed?")
+            .default(true)
+            .interact()?
+    };
     if !proceed {
         println!("{}", "OK, aborting.".bright_red());
         return Err(eyre!("User aborted"));
