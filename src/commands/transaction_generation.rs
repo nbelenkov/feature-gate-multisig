@@ -819,31 +819,68 @@ pub async fn create_feature_gate_proposal(
     output::Output::header(&format!("🎯 Create {} Proposal", kind.label()));
     output::Output::field("Feature ID", &feature_id.to_string());
     output::Output::field("Multisig", &feature_gate_multisig_address.to_string());
-    output::Output::field("Next Transaction Index", &next_tx_index.to_string());
+    output::Output::field("Next Vault Transaction Index", &next_tx_index.to_string());
+    output::Output::field("Next Config Transaction Index", &(next_tx_index + 1).to_string());
+
+    // Determine config action based on kind
+    let (config_actions, config_memo) = match kind {
+        TransactionKind::Activate => (
+            vec![crate::squads::ConfigAction::ChangeThreshold { new_threshold: 1 }],
+            Some("Lower threshold to 1 for safe revocation".to_string()),
+        ),
+        TransactionKind::Revoke => (
+            vec![crate::squads::ConfigAction::ChangeThreshold {
+                new_threshold: feature_gate_ms.threshold,
+            }],
+            Some(format!("Restore threshold to {}", feature_gate_ms.threshold)),
+        ),
+        _ => return Err(eyre::eyre!("Unsupported kind for feature gate proposal")),
+    };
 
     if is_parent_multisig {
-        output::Output::info("Parent multisig detected - creating parent proposal");
+        output::Output::info("Parent multisig detected - creating bundled proposals (vault + config)");
 
-        let child_tx_message =
+        let vault_tx_message =
             crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
 
-        return handle_parent_multisig_flow(
+        let config_index = next_tx_index + 1;
+
+        // Build paired proposals message (4 instructions in ONE parent tx)
+        // Note: Memo is set to None to reduce transaction size for parent multisig flows
+        let paired_message = crate::provision::create_child_create_paired_proposals_message(
+            feature_gate_multisig_address,
+            next_tx_index,
+            config_index,
+            voting_key, // parent vault PDA
+            fee_payer_signer.pubkey(),
+            vault_tx_message,
+            config_actions,
+            None, // No memo to save transaction size (~64 bytes)
+        );
+
+        handle_parent_multisig_flow(
             &program_id,
             voting_key,
             feature_gate_multisig_address,
-            next_tx_index,
+            next_tx_index, // Parent proposal relates to first child proposal
             kind,
-            ChildTransactionFlavor::Vault,
+            ChildTransactionFlavor::Vault, // Primary flavor
             &fee_payer_signer,
             &rpc_url,
             ProposalAction::Create,
-            ParentFlowPayload::Create(child_tx_message),
+            ParentFlowPayload::Create(paired_message),
         )
-        .await;
+        .await?;
+
+        output::Output::field("Vault proposal index:", &next_tx_index.to_string());
+        output::Output::field("Config proposal index:", &config_index.to_string());
+        output::Output::info("Both proposals created in a single parent transaction");
+
+        return Ok(());
     }
 
-    // EOA voting path - create vault transaction and proposal
-    output::Output::info(&format!("Creating {} proposal...", kind.label()));
+    // EOA voting path - create paired proposals (vault + config)
+    output::Output::info(&format!("Creating paired {} proposals (vault + config)...", kind.label()));
 
     // Verify voting_key has Initiate permission
     let is_member = feature_gate_ms.members.iter().any(|m| m.key == voting_key);
@@ -872,43 +909,31 @@ pub async fn create_feature_gate_proposal(
         ));
     }
 
-    let tx_message =
+    let vault_message =
         crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
 
-    // Get fresh blockhash
-    let blockhash = rpc_client.get_latest_blockhash()?;
+    // Create BOTH proposals in ONE transaction using bundled creation
+    let config_index = next_tx_index + 1;
 
-    // Create transaction and proposal
-    let (message, tx_pda, proposal_pda) = create_transaction_and_proposal_message(
-        Some(&program_id),
-        &fee_payer_signer.pubkey(),
-        &voting_key,
+    // In EOA mode, voting_key == fee_payer, so we can use fee_payer_signer as contributor
+    crate::utils::create_and_send_paired_proposals(
+        &rpc_url,
+        &fee_payer_signer,
+        fee_payer_signer.as_ref(),
         &feature_gate_multisig_address,
-        next_tx_index,
-        0, // vault_index
-        tx_message,
-        Some(crate::constants::DEFAULT_PRIORITY_FEE as u32),
-        Some(crate::constants::DEFAULT_COMPUTE_UNITS),
-        blockhash,
-    )?;
+        next_tx_index,   // Vault proposal index
+        config_index,    // Config proposal index
+        vault_message,
+        config_actions.clone(),
+        config_memo.clone(),
+    ).await?;
 
-    output::Output::address("Transaction PDA:", &tx_pda.to_string());
-    output::Output::address("Proposal PDA:", &proposal_pda.to_string());
-
-    let transaction =
-        VersionedTransaction::try_new(VersionedMessage::V0(message), &[fee_payer_signer.as_ref()])?;
-
-    let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
-        .map_err(|e| eyre::eyre!("Failed to create proposal: {}", e))?;
-
-    output::Output::field(
-        &format!("{} proposal created (sig):", kind.label()),
-        &signature,
-    );
-    output::Output::field("Proposal index:", &next_tx_index.to_string());
+    output::Output::field("Vault proposal index:", &next_tx_index.to_string());
+    output::Output::field("Config proposal index:", &config_index.to_string());
+    output::Output::info("Both proposals created in a single transaction");
 
     output::Output::info(
-        "Next step: Gather approvals from other members, then execute the proposal.",
+        "Next step: Gather approvals from other members, then execute the proposals.",
     );
     Ok(())
 }

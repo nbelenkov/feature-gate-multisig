@@ -584,6 +584,199 @@ pub async fn create_and_send_transaction_proposal(
     Ok(())
 }
 
+/// Create and send PAIRED proposals (vault + config) in a single atomic transaction.
+/// This creates 4 instructions (no compute budget instructions to minimize transaction size):
+/// 1. VaultTransactionCreate (for activate/revoke)
+/// 2. ProposalCreate (for vault transaction)
+/// 3. ConfigTransactionCreate (for threshold change)
+/// 4. ProposalCreate (for config transaction)
+///
+/// Both proposals are created atomically - either both succeed or both fail.
+/// Note: Compute budget instructions are excluded to reduce transaction size.
+pub async fn create_and_send_paired_proposals(
+    rpc_url: &str,
+    fee_payer_signer: &Box<dyn Signer>,
+    contributor_signer: &dyn Signer,
+    multisig_address: &Pubkey,
+    vault_tx_index: u64,
+    config_tx_index: u64,
+    vault_message: crate::squads::TransactionMessage,
+    config_actions: Vec<crate::squads::ConfigAction>,
+    config_memo: Option<String>,
+) -> Result<()> {
+    use crate::squads::{
+        get_proposal_pda, get_transaction_pda, ConfigTransactionCreateArgs,
+        ConfigTransactionCreateData, MultisigCreateProposalAccounts, MultisigCreateProposalArgs,
+        MultisigCreateProposalData, MultisigCreateTransaction, VaultTransactionCreateArgs,
+        VaultTransactionCreateArgsData, SQUADS_MULTISIG_PROGRAM_ID,
+    };
+    use solana_instruction::Instruction;
+    use solana_message::v0::Message;
+    use solana_message::VersionedMessage;
+    use solana_transaction::versioned::VersionedTransaction;
+
+    let rpc_client = create_rpc_client(rpc_url);
+    let recent_blockhash = rpc_client
+        .get_latest_blockhash()
+        .map_err(|e| eyre::eyre!("Failed to get recent blockhash: {}", e))?;
+
+    let fee_payer_pubkey = fee_payer_signer.pubkey();
+    let contributor_pubkey = contributor_signer.pubkey();
+    let program_id = &SQUADS_MULTISIG_PROGRAM_ID;
+
+    // Calculate PDAs for both transaction/proposal pairs
+    let (vault_transaction_pda, _) =
+        get_transaction_pda(multisig_address, vault_tx_index, Some(program_id));
+    let (vault_proposal_pda, _) =
+        get_proposal_pda(multisig_address, vault_tx_index, Some(program_id));
+    let (config_transaction_pda, _) =
+        get_transaction_pda(multisig_address, config_tx_index, Some(program_id));
+    let (config_proposal_pda, _) =
+        get_proposal_pda(multisig_address, config_tx_index, Some(program_id));
+
+    // Build instructions list
+    let mut instructions = Vec::new();
+
+    // 1. Create vault transaction instruction
+    let vault_create_transaction_accounts = MultisigCreateTransaction {
+        multisig: *multisig_address,
+        transaction: vault_transaction_pda,
+        creator: contributor_pubkey,
+        rent_payer: fee_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    };
+
+    let vault_transaction_message_bytes = borsh::to_vec(&vault_message)?;
+    let vault_create_transaction_data = VaultTransactionCreateArgsData {
+        args: VaultTransactionCreateArgs {
+            vault_index: 0,
+            ephemeral_signers: 0,
+            transaction_message: vault_transaction_message_bytes,
+            memo: None,
+        },
+    };
+
+    let vault_create_transaction_instruction = Instruction::new_with_bytes(
+        *program_id,
+        &vault_create_transaction_data.data(),
+        vault_create_transaction_accounts.to_account_metas(None),
+    );
+    instructions.push(vault_create_transaction_instruction);
+
+    // 2. Create vault proposal instruction
+    let vault_create_proposal_accounts = MultisigCreateProposalAccounts {
+        multisig: *multisig_address,
+        proposal: vault_proposal_pda,
+        creator: contributor_pubkey,
+        rent_payer: fee_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    };
+
+    let vault_create_proposal_data = MultisigCreateProposalData {
+        args: MultisigCreateProposalArgs {
+            transaction_index: vault_tx_index,
+            is_draft: false,
+        },
+    };
+
+    let vault_create_proposal_instruction = Instruction::new_with_bytes(
+        *program_id,
+        &vault_create_proposal_data.data(),
+        vault_create_proposal_accounts.to_account_metas(None),
+    );
+    instructions.push(vault_create_proposal_instruction);
+
+    // 3. Create config transaction instruction
+    let config_create_transaction_accounts = vec![
+        solana_instruction::AccountMeta::new(*multisig_address, false),
+        solana_instruction::AccountMeta::new(config_transaction_pda, false),
+        solana_instruction::AccountMeta::new_readonly(contributor_pubkey, true),
+        solana_instruction::AccountMeta::new(fee_payer_pubkey, true),
+        solana_instruction::AccountMeta::new_readonly(
+            solana_system_interface::program::ID,
+            false,
+        ),
+    ];
+
+    let config_create_transaction_data = ConfigTransactionCreateData {
+        args: ConfigTransactionCreateArgs {
+            actions: config_actions,
+            memo: config_memo.clone(),
+        },
+    };
+
+    let config_create_transaction_instruction = Instruction::new_with_bytes(
+        *program_id,
+        &config_create_transaction_data.data(),
+        config_create_transaction_accounts,
+    );
+    instructions.push(config_create_transaction_instruction);
+
+    // 4. Create config proposal instruction
+    let config_create_proposal_accounts = MultisigCreateProposalAccounts {
+        multisig: *multisig_address,
+        proposal: config_proposal_pda,
+        creator: contributor_pubkey,
+        rent_payer: fee_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    };
+
+    let config_create_proposal_data = MultisigCreateProposalData {
+        args: MultisigCreateProposalArgs {
+            transaction_index: config_tx_index,
+            is_draft: false,
+        },
+    };
+
+    let config_create_proposal_instruction = Instruction::new_with_bytes(
+        *program_id,
+        &config_create_proposal_data.data(),
+        config_create_proposal_accounts.to_account_metas(None),
+    );
+    instructions.push(config_create_proposal_instruction);
+
+    // Create message with all instructions
+    let message = Message::try_compile(&fee_payer_pubkey, &instructions, &[], recent_blockhash)?;
+
+    // Sign the transaction
+    let signers: &[&dyn Signer] = if fee_payer_pubkey == contributor_pubkey {
+        &[contributor_signer]
+    } else {
+        &[fee_payer_signer.as_ref(), contributor_signer]
+    };
+
+    let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), signers)
+        .map_err(|e| eyre::eyre!("Failed to create signed transaction: {}", e))?;
+
+    // Send the transaction
+    let progress = ProgressBar::new_spinner().with_message("Creating paired proposals...");
+    progress.enable_steady_tick(Duration::from_millis(100));
+
+    let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
+        .map_err(|e| eyre::eyre!("Failed to send paired proposals: {}", e))?;
+
+    let network_display = if rpc_url.contains("devnet") {
+        "Devnet"
+    } else if rpc_url.contains("mainnet") {
+        "Mainnet"
+    } else if rpc_url.contains("testnet") {
+        "Testnet"
+    } else {
+        "Custom"
+    };
+
+    progress.finish_with_message(format!(
+        "Paired Proposals Created ({}) - Vault Index: {}, Config Index: {}\nSignature ({}): {}",
+        network_display,
+        vault_tx_index,
+        config_tx_index,
+        network_display,
+        signature.to_string().bright_green()
+    ));
+    println!("");
+    Ok(())
+}
+
 /// Create and send a transaction to fund the feature gate account with rent-exempt lamports
 ///
 /// # Arguments

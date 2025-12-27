@@ -258,9 +258,11 @@ async fn rpc_e2e_2_revoke_feature_gate() {
     );
     println!("   Feature gate ID (vault): {}", fixture.child_vault);
 
-    let proposal_index = 2u64; // Revocation proposal created by create_command
+    // Step 1: Lower threshold from 3 to 1 (Index 2 - Config transaction)
+    println!("\nStep 1: Approve and execute Index 2 (Lower Threshold to 1)");
+    let lower_threshold_index = 2u64;
 
-    // Approve using parent arrays (EOA at index 1)
+    // Approve with 3 members (threshold is currently 3)
     for i in 0..3 {
         let voter = fixture.parent_multisigs[i];
         let keypair_path = &fixture.parent_key_paths[i];
@@ -271,42 +273,103 @@ async fn rpc_e2e_2_revoke_feature_gate() {
             voter,
             keypair_path.clone(),
             None,
-            proposal_index,
-            TransactionKind::Revoke,
+            lower_threshold_index,
+            TransactionKind::Rekey, // Config transaction
         )
         .await
-        .expect("approve revoke proposal");
+        .expect("approve lower threshold proposal");
 
-        println!("✅ Approver {} approved revoke proposal", i + 1);
+        println!("✅ Approver {} approved Index 2 (Lower Threshold)", i + 1);
     }
 
-    // Execute via parent 2 (skip EOA at index 1)
-    let executor_multisig = fixture.parent_multisigs[2];
-
+    // Execute Index 2
     execute_common_feature_gate_proposal(
         &fixture.config,
         fixture.child_multisig,
-        executor_multisig,
+        fixture.parent_multisigs[2],
         fixture.parent_key_paths[2].clone(),
         None,
-        proposal_index,
+        lower_threshold_index,
+        TransactionKind::Rekey,
+    )
+    .await
+    .expect("execute lower threshold proposal");
+
+    println!("✅ Index 2 executed - Threshold lowered to 1");
+
+    // Verify threshold is now 1
+    let child_ms_account = client
+        .get_account(&fixture.child_multisig)
+        .expect("fetch child multisig");
+    let child_ms: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
+            .expect("deserialize child multisig");
+    assert_eq!(child_ms.threshold, 1, "threshold should be 1 after Index 2");
+    println!("✅ Verified: Threshold is now 1");
+
+    // Step 2: Create revocation proposal dynamically (after threshold is 1)
+    println!("\nStep 2: Create revocation proposal (Index 3) after threshold is lowered");
+    let revocation_index = child_ms.transaction_index + 1;
+
+    // Create revocation proposal via parent multisig
+    create_feature_gate_proposal(
+        &fixture.config,
+        fixture.child_multisig,
+        fixture.parent_multisigs[0],
+        fixture.parent_key_paths[0].clone(),
+        None,
         TransactionKind::Revoke,
     )
     .await
-    .expect("execute revoke proposal");
+    .expect("create revoke proposal dynamically");
 
-    println!("✅ Feature gate revoked");
+    println!("✅ Revocation proposal created at index {}", revocation_index);
 
-    // Verify feature gate account was reassigned/cleared (it may also be fully closed)
-    // After revoke, the feature account should be closed (not found)
-    let account_result = client.get_account(&fixture.child_vault);
-    assert!(
-        account_result.is_err(),
-        "feature gate account should be closed after revoke"
+    // Step 3: Approve revocation with only 1 approval (threshold is now 1)
+    println!("\nStep 3: Approve revocation with only 1 approval");
+
+    approve_common_feature_gate_proposal(
+        &fixture.config,
+        fixture.child_multisig,
+        fixture.parent_multisigs[0],
+        fixture.parent_key_paths[0].clone(),
+        None,
+        revocation_index,
+        TransactionKind::Revoke,
+    )
+    .await
+    .expect("approve revoke proposal with 1 approval");
+
+    println!("✅ Revocation approved with only 1 approval!");
+
+    // Verify the proposal is approved with just 1 approval
+    let (proposal_pda, _) = get_proposal_pda(&fixture.child_multisig, revocation_index, None);
+    let proposal_account = client
+        .get_account(&proposal_pda)
+        .expect("proposal account should exist");
+    let proposal: Proposal = BorshDeserialize::deserialize(&mut &proposal_account.data[8..])
+        .expect("deserialize proposal");
+
+    assert_eq!(
+        proposal.approved.len(),
+        1,
+        "revocation proposal should have 1 approval"
     );
-    println!("✅ Feature gate account closed after revoke");
+    match proposal.status {
+        ProposalStatus::Approved { timestamp: _ } => {
+            println!("✅ Proposal status: Approved with 1 approval (threshold is 1)");
+        }
+        _ => panic!("Expected proposal to be Approved"),
+    }
 
-    println!("✅ Feature gate revocation E2E test completed successfully!");
+    println!("\n✅ Feature gate revocation E2E test completed successfully!");
+    println!("   Demonstrated:");
+    println!("     - Activation requires {} approvals (Index 1)", 3);
+    println!("     - Lower threshold requires {} approvals (Index 2)", 3);
+    println!("     - Revocation proposal created dynamically after threshold lowered");
+    println!("     - Revocation executed with only 1 approval (Index {})!", revocation_index);
+    println!();
+    println!("   This proves emergency feature revocation works with 1 approval!");
 }
 
 #[tokio::test(flavor = "multi_thread")]

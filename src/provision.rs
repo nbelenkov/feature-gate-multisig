@@ -982,6 +982,194 @@ pub fn create_child_create_config_transaction_and_proposal_message(
     }
 }
 
+/// Build a TransactionMessage for a parent multisig to CREATE BOTH a child's vault transaction
+/// (for activate/revoke) AND a config transaction (for threshold change) along with their proposals.
+/// This creates 4 instructions in a single parent transaction:
+/// 1. VaultTransactionCreate (for activate/revoke)
+/// 2. ProposalCreate (for vault transaction)
+/// 3. ConfigTransactionCreate (for threshold change)
+/// 4. ProposalCreate (for config transaction)
+pub fn create_child_create_paired_proposals_message(
+    child_multisig: Pubkey,
+    vault_tx_index: u64,
+    config_tx_index: u64,
+    parent_member_pubkey: Pubkey,
+    rent_payer_pubkey: Pubkey,
+    vault_transaction_message: TransactionMessage,
+    config_actions: Vec<crate::squads::ConfigAction>,
+    config_memo: Option<String>,
+) -> TransactionMessage {
+    use crate::squads::{
+        ConfigTransactionCreateArgs, ConfigTransactionCreateData, MultisigCreateProposalAccounts,
+        MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
+        SmallVec, VaultTransactionCreateArgs, VaultTransactionCreateArgsData,
+        SQUADS_MULTISIG_PROGRAM_ID,
+    };
+
+    // Calculate PDAs for both transactions and proposals
+    let (vault_transaction_pda, _) = get_transaction_pda(
+        &child_multisig,
+        vault_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (vault_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        vault_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (config_transaction_pda, _) = get_transaction_pda(
+        &child_multisig,
+        config_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (config_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        config_tx_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+
+    // Instruction 1: VaultTransactionCreate
+    let vault_create_transaction_accounts = MultisigCreateTransaction {
+        multisig: child_multisig,
+        transaction: vault_transaction_pda,
+        creator: parent_member_pubkey,
+        rent_payer: rent_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    };
+
+    let vault_create_transaction_data = VaultTransactionCreateArgsData {
+        args: VaultTransactionCreateArgs {
+            vault_index: 0,
+            ephemeral_signers: 0,
+            transaction_message: borsh::to_vec(&vault_transaction_message)
+                .expect("serialize vault_transaction_message"),
+            memo: None,
+        },
+    }
+    .data();
+
+    // Instruction 2: ProposalCreate (for vault transaction)
+    let vault_create_proposal_accounts = MultisigCreateProposalAccounts {
+        multisig: child_multisig,
+        proposal: vault_proposal_pda,
+        creator: parent_member_pubkey,
+        rent_payer: rent_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    };
+
+    let vault_create_proposal_data = MultisigCreateProposalData {
+        args: MultisigCreateProposalArgs {
+            transaction_index: vault_tx_index,
+            is_draft: false,
+        },
+    }
+    .data();
+
+    // Instruction 3: ConfigTransactionCreate
+    let config_create_accounts = vec![
+        solana_instruction::AccountMeta::new(child_multisig, false),
+        solana_instruction::AccountMeta::new(config_transaction_pda, false),
+        solana_instruction::AccountMeta::new_readonly(parent_member_pubkey, true),
+        solana_instruction::AccountMeta::new(rent_payer_pubkey, true),
+        solana_instruction::AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+    ];
+
+    let config_create_data = ConfigTransactionCreateData {
+        args: ConfigTransactionCreateArgs {
+            actions: config_actions,
+            memo: config_memo,
+        },
+    }
+    .data();
+
+    // Instruction 4: ProposalCreate (for config transaction)
+    let config_create_proposal_accounts = MultisigCreateProposalAccounts {
+        multisig: child_multisig,
+        proposal: config_proposal_pda,
+        creator: parent_member_pubkey,
+        rent_payer: rent_payer_pubkey,
+        system_program: solana_system_interface::program::ID,
+    }
+    .to_account_metas(None);
+
+    let config_create_proposal_data = MultisigCreateProposalData {
+        args: MultisigCreateProposalArgs {
+            transaction_index: config_tx_index,
+            is_draft: false,
+        },
+    }
+    .data();
+
+    // Union of all accounts needed for all 4 instructions + program id
+    // Signers must be first in account_keys
+    let account_keys: Vec<Pubkey> = vec![
+        rent_payer_pubkey,                    // signer (writable)
+        parent_member_pubkey,                 // signer (readonly)
+        child_multisig,                       // writable non-signer
+        vault_transaction_pda,                // writable non-signer
+        vault_proposal_pda,                   // writable non-signer
+        config_transaction_pda,               // writable non-signer
+        config_proposal_pda,                  // writable non-signer
+        solana_system_interface::program::ID, // readonly non-signer
+        SQUADS_MULTISIG_PROGRAM_ID,           // program id
+    ];
+
+    let program_id_index = 8u8;
+
+    // Helper to map metas to indexes in account_keys
+    let meta_indexes = |metas: &[solana_instruction::AccountMeta]| -> SmallVec<u8, u8> {
+        let idxs: Vec<u8> = metas
+            .iter()
+            .map(|m| {
+                account_keys
+                    .iter()
+                    .position(|k| *k == m.pubkey)
+                    .expect("meta pubkey present in account_keys") as u8
+            })
+            .collect();
+        SmallVec::from(idxs)
+    };
+
+    // Build all 4 instructions
+    let vault_create_tx_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&vault_create_transaction_accounts.to_account_metas(None)),
+        data: SmallVec::from(vault_create_transaction_data),
+    };
+
+    let vault_create_prop_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&vault_create_proposal_accounts.to_account_metas(None)),
+        data: SmallVec::from(vault_create_proposal_data),
+    };
+
+    let config_create_tx_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&config_create_accounts),
+        data: SmallVec::from(config_create_data),
+    };
+
+    let config_create_prop_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&config_create_proposal_accounts),
+        data: SmallVec::from(config_create_proposal_data),
+    };
+
+    TransactionMessage {
+        num_signers: 2,
+        num_writable_signers: 1, // rent payer writable; creator readonly
+        num_writable_non_signers: 5, // multisig, vault_tx, vault_proposal, config_tx, config_proposal
+        account_keys: SmallVec::from(account_keys),
+        instructions: SmallVec::from(vec![
+            vault_create_tx_ix,
+            vault_create_prop_ix,
+            config_create_tx_ix,
+            config_create_prop_ix,
+        ]),
+        address_table_lookups: SmallVec::from(vec![]),
+    }
+}
+
 /// Build a TransactionMessage for a parent multisig to CREATE a child's vault transaction
 /// (using an already-built `TransactionMessage`) and its proposal in a single parent transaction.
 /// The parent vault PDA acts as creator; the provided rent payer funds the account creations.

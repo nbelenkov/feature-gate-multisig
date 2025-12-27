@@ -167,24 +167,23 @@ async fn deploy_to_single_network(
 
     let vault_address = get_vault_pda(&multisig_address, 0, None).0;
 
-    // Create both activation and revocation transactions
-    create_and_send_transaction_proposal(
+    // Create paired proposals for activation flow (Indices 1 + 2 in ONE transaction)
+    // Index 1: Activation vault transaction
+    // Index 2: Lower threshold to 1 config transaction
+    // NOTE: Index 3 (Revocation) and Index 4 (Restore Threshold) are NOT created here
+    // because they would become stale after Index 2 executes (config change).
+    // They must be created dynamically via `create_feature_gate_proposal` command.
+    let activation_message = create_feature_activation_transaction_message(vault_address);
+    crate::utils::create_and_send_paired_proposals(
         rpc_url,
         fee_payer_signer,
-        setup_keypair,
+        setup_keypair as &dyn solana_signer::Signer,
         &multisig_address,
-        "activation",
-        1, // Transaction index 1 (activation)
-    )
-    .await?;
-
-    create_and_send_transaction_proposal(
-        rpc_url,
-        fee_payer_signer,
-        setup_keypair,
-        &multisig_address,
-        "revocation",
-        2, // Transaction index 2 (revocation)
+        1, // Vault transaction index (activation)
+        2, // Config transaction index (lower threshold)
+        activation_message,
+        vec![crate::squads::ConfigAction::ChangeThreshold { new_threshold: 1 }],
+        Some("Lower threshold to 1 for safe revocation".to_string()),
     )
     .await?;
 
@@ -317,9 +316,10 @@ fn print_deployment_summary(
         // Feature Gate ID is the vault address (index 0)
         let feature_gate_id = deployment.vault_address;
 
-        // Calculate proposal PDAs for activation and revocation transactions
+        // Calculate proposal PDAs for the 2 pre-created proposals
         let activation_proposal_pda = get_proposal_pda(&deployment.multisig_address, 1, None).0;
-        let revocation_proposal_pda = get_proposal_pda(&deployment.multisig_address, 2, None).0;
+        let lower_threshold_proposal_pda =
+            get_proposal_pda(&deployment.multisig_address, 2, None).0;
 
         println!("\n{}", "⚙️ General Info".bright_white().bold());
         println!();
@@ -362,16 +362,32 @@ fn print_deployment_summary(
         println!();
         Output::field("Threshold", &threshold.to_string());
 
-        println!("\n{}", "⚙️ Proposals".bright_white().bold());
+        println!("\n{}", "⚙️ Pre-Created Proposals".bright_white().bold());
         println!();
-        Output::field(
-            "Feature Gate Activation Proposal",
-            &activation_proposal_pda.to_string(),
-        );
-        Output::field(
-            "Feature Gate Revocation Proposal",
-            &revocation_proposal_pda.to_string(),
-        );
+        println!("  {} Index 1: {}", "🔹".bright_cyan(), "Activation".bright_white().bold());
+        println!("     Address: {}", activation_proposal_pda.to_string().bright_green());
+        println!("     Type: Vault Transaction");
+        println!("     Requires: {}/{} approvals", threshold, threshold);
+        println!();
+
+        println!("  {} Index 2: {}", "🔹".bright_cyan(), "Lower Threshold".bright_white().bold());
+        println!("     Address: {}", lower_threshold_proposal_pda.to_string().bright_green());
+        println!("     Type: Config Transaction");
+        println!("     Requires: {}/{} approvals", threshold, threshold);
+        println!("     {}: Execute BEFORE revocation to enable 1-approval emergency revocation", "Note".yellow());
+        println!();
+
+        println!("\n{}", "⚙️ Revocation Workflow".bright_white().bold());
+        println!();
+        println!("  {}: Revocation proposals (Index 3 + 4) must be created dynamically", "Important".yellow().bold());
+        println!("  after Index 2 executes, otherwise they become stale.");
+        println!();
+        println!("  Steps:");
+        println!("    1. Execute Index 2 to lower threshold to 1");
+        println!("    2. Create Index 3 (Revocation) - requires 1 approval");
+        println!("    3. Execute Index 3 to revoke the feature");
+        println!("    4. Create Index 4 (Restore Threshold) - requires 1 approval");
+        println!("    5. Execute Index 4 to restore threshold to {}", threshold);
 
         if deployments.len() > 1 {
             println!("\n{}", "─".repeat(50).bright_cyan());
