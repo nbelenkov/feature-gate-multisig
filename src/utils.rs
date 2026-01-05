@@ -1,19 +1,17 @@
 use crate::constants::*;
 use crate::feature_gate_program::activate_feature_funded;
 use crate::provision::create_rpc_client;
-use crate::squads::{get_vault_pda, CompiledInstruction, Member, Permissions, TransactionMessage};
+use crate::squads::{CompiledInstruction, Member, Permissions, TransactionMessage};
 use colored::*;
 use dirs;
 use eyre::Result;
 use indicatif::ProgressBar;
 use inquire::{Confirm, Select, Text};
 use serde::{Deserialize, Serialize};
-use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
-use solana_signer::{EncodableKey, Signer};
+use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use std::fmt::Display;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -43,9 +41,11 @@ impl Default for Config {
 
 #[derive(Debug)]
 pub struct DeploymentResult {
+    #[allow(dead_code)]
     pub rpc_url: String,
     pub multisig_address: Pubkey,
     pub vault_address: Pubkey,
+    #[allow(dead_code)]
     pub transaction_signature: String,
 }
 
@@ -69,7 +69,7 @@ pub fn load_config() -> Result<Config> {
     let config_str = fs::read_to_string(&config_path)
         .map_err(|e| eyre::eyre!("Failed to read config file: {}", e))?;
 
-    let mut config: Config = serde_json::from_str(&config_str)
+    let config: Config = serde_json::from_str(&config_str)
         .map_err(|e| eyre::eyre!("Failed to parse config file: {}", e))?;
 
     Ok(config)
@@ -441,149 +441,6 @@ pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> Tran
     }
 }
 
-pub fn create_feature_revocation_transaction_message(feature_id: Pubkey) -> TransactionMessage {
-    use crate::squads::SmallVec;
-
-    // Create feature revocation instruction
-    let instruction = crate::feature_gate_program::revoke_pending_activation(&feature_id);
-
-    // Build account keys list for the message
-    let mut account_keys = vec![
-        feature_id,                                  // 0: Feature account (signer, writable)
-        crate::feature_gate_program::INCINERATOR_ID, // 1: Incinerator (writable)
-        solana_system_interface::program::ID,        // 2: System program
-        crate::feature_gate_program::FEATURE_GATE_PROGRAM_ID, // 3: Feature gate program
-    ];
-
-    // Find program_id index in account_keys
-    let program_id_index = account_keys
-        .iter()
-        .position(|key| *key == instruction.program_id)
-        .unwrap_or_else(|| {
-            account_keys.push(instruction.program_id);
-            account_keys.len() - 1
-        }) as u8;
-
-    // Map account pubkeys to indices
-    let account_indexes: Vec<u8> = instruction
-        .accounts
-        .iter()
-        .map(|account_meta| {
-            account_keys
-                .iter()
-                .position(|key| *key == account_meta.pubkey)
-                .unwrap_or_else(|| {
-                    account_keys.push(account_meta.pubkey);
-                    account_keys.len() - 1
-                }) as u8
-        })
-        .collect();
-
-    let compiled_instructions = vec![CompiledInstruction {
-        program_id_index,
-        account_indexes: SmallVec::from(account_indexes),
-        data: SmallVec::from(instruction.data),
-    }];
-
-    TransactionMessage {
-        num_signers: 1,              // feature_id is the signer
-        num_writable_signers: 1,     // feature_id is writable signer
-        num_writable_non_signers: 1, // incinerator is writable non-signer
-        account_keys: SmallVec::from(account_keys),
-        instructions: SmallVec::from(compiled_instructions),
-        address_table_lookups: SmallVec::from(vec![]),
-    }
-}
-
-pub async fn create_and_send_transaction_proposal(
-    rpc_url: &str,
-    fee_payer_signer: &Box<dyn Signer>,
-    contributor_keypair: &Keypair,
-    multisig_address: &Pubkey,
-    transaction_type: &str,
-    transaction_index: u64,
-) -> Result<()> {
-    let vault_address = get_vault_pda(multisig_address, 0, None).0;
-
-    let transaction_message = match transaction_type {
-        "activation" => create_feature_activation_transaction_message(vault_address),
-        "revocation" => create_feature_revocation_transaction_message(vault_address),
-        _ => {
-            return Err(eyre::eyre!(
-                "Invalid transaction type: {}",
-                transaction_type
-            ))
-        }
-    };
-
-    let rpc_client = create_rpc_client(rpc_url);
-    let recent_blockhash = rpc_client
-        .get_latest_blockhash()
-        .map_err(|e| eyre::eyre!("Failed to get recent blockhash: {}", e))?;
-
-    let fee_payer_pubkey = fee_payer_signer.pubkey();
-
-    // Use the integrated create_transaction_and_proposal_message function from provision.rs
-    let (message, _transaction_pda, _proposal_pda) =
-        crate::provision::create_transaction_and_proposal_message(
-            None, // Use default program ID
-            &fee_payer_pubkey,
-            &contributor_keypair.pubkey(),
-            multisig_address,
-            transaction_index,
-            0, // Vault index 0 (default vault for feature gates)
-            transaction_message,
-            Some(DEFAULT_PRIORITY_FEE as u32), // Priority fee
-            Some(DEFAULT_COMPUTE_UNITS),       // Compute unit limit
-            recent_blockhash,
-        )
-        .map_err(|e| eyre::eyre!("Failed to create transaction and proposal message: {}", e))?;
-
-    let signers: &[&dyn Signer] = if fee_payer_pubkey == contributor_keypair.pubkey() {
-        &[contributor_keypair]
-    } else {
-        &[
-            fee_payer_signer.as_ref(),
-            contributor_keypair as &dyn Signer,
-        ]
-    };
-
-    let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), signers)
-        .map_err(|e| eyre::eyre!("Failed to create signed transaction: {}", e))?;
-
-    let progress = ProgressBar::new_spinner().with_message("Sending transaction...");
-    progress.enable_steady_tick(Duration::from_millis(100));
-
-    let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
-        .map_err(|e| eyre::eyre!("Failed to send transaction and proposal: {}", e))?;
-
-    // Simple signature output with description and network
-    let description = match transaction_type {
-        "activation" => "Feature Gate Activation Proposal Confirmed",
-        "revocation" => "Feature Gate Revocation Proposal Confirmed",
-        _ => "Transaction",
-    };
-
-    let network_display = if rpc_url.contains("devnet") {
-        "Devnet"
-    } else if rpc_url.contains("mainnet") {
-        "Mainnet"
-    } else if rpc_url.contains("testnet") {
-        "Testnet"
-    } else {
-        "Custom"
-    };
-
-    progress.finish_with_message(format!(
-        "{} ({}): {}",
-        description,
-        network_display,
-        signature.to_string().bright_green()
-    ));
-    println!("");
-    Ok(())
-}
-
 /// Create and send PAIRED proposals (vault + config) in a single atomic transaction.
 /// This creates 4 instructions (no compute budget instructions to minimize transaction size):
 /// 1. VaultTransactionCreate (for activate/revoke)
@@ -935,26 +792,6 @@ pub fn validate_rpc_url(url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TransactionEncoding {
-    #[serde(rename = "base58")]
-    Base58,
-    #[serde(rename = "base64")]
-    Base64,
-}
-
-impl Display for TransactionEncoding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                TransactionEncoding::Base58 => "base58",
-                TransactionEncoding::Base64 => "base64",
-            }
-        )
-    }
-}
 
 pub fn choose_network_from_config(config: &Config) -> Result<String> {
     let available_networks = if !config.networks.is_empty() {

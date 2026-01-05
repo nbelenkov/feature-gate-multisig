@@ -62,15 +62,6 @@ pub async fn create_command_with_deployments(
         },
     );
 
-    // // Display final configuration
-    // display_final_configuration(
-    //     &contributor_pubkey,
-    //     &create_key.pubkey(),
-    //     &fee_payer_keypair,
-    //     final_threshold,
-    //     &members,
-    // );
-
     // Determine network deployment mode and deploy
     let (use_saved_networks, saved_networks) = choose_network_mode(config, true)?;
 
@@ -132,25 +123,12 @@ pub async fn create_command_with_deployments(
 
 async fn deploy_to_single_network(
     rpc_url: &str,
-    network_index: usize,
-    total_networks: usize,
     create_key: &Keypair,
     setup_keypair: &Keypair,
     fee_payer_signer: &Box<dyn Signer>,
     members: &[Member],
     threshold: u16,
 ) -> Result<DeploymentResult> {
-    // display_deployment_info(
-    //     network_index,
-    //     total_networks,
-    //     rpc_url,
-    //     &create_key.pubkey(),
-    //     &contributor_keypair.pubkey(),
-    //     &multisig_address,
-    //     &vault_address,
-    //     members,
-    // );
-
     let signer_for_creation = fee_payer_signer.as_ref();
 
     let (multisig_address, signature) = create_multisig(
@@ -211,8 +189,6 @@ async fn deploy_to_saved_networks(
     for (i, rpc_url) in networks.iter().enumerate() {
         match deploy_to_single_network(
             rpc_url,
-            i,
-            networks.len(),
             create_key,
             setup_keypair,
             fee_payer_signer,
@@ -260,8 +236,6 @@ async fn deploy_to_manual_networks(
 
         match deploy_to_single_network(
             &rpc_url,
-            0,
-            1,
             create_key,
             contributor_keypair,
             fee_payer_signer,

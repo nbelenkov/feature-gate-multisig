@@ -67,16 +67,15 @@ pub enum ConfigAction {
     ChangeThreshold { new_threshold: u16 },
 }
 
-pub const SEED_EPHEMERAL_SIGNER: &[u8] = b"ephemeral_signer";
-
-pub const SQUADS_MULTISIG_PROGRAM: Pubkey =
-    Pubkey::from_str_const("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf");
 
 #[derive(BorshDeserialize)]
 pub struct ProgramConfig {
+    #[allow(dead_code)]
     pub authority: Pubkey,
+    #[allow(dead_code)]
     pub multisig_creation_fee: u64,
     pub treasury: Pubkey,
+    #[allow(dead_code)]
     pub _reserved: [u8; 64],
 }
 #[derive(BorshSerialize)]
@@ -102,17 +101,6 @@ pub struct VaultTransaction {
 }
 
 impl VaultTransactionMessage {
-    /// Returns the number of all the account keys (static + dynamic) in the message.
-    pub fn num_all_account_keys(&self) -> usize {
-        let num_account_keys_from_lookups = self
-            .address_table_lookups
-            .iter()
-            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
-            .sum::<usize>();
-
-        self.account_keys.len() + num_account_keys_from_lookups
-    }
-
     /// Returns true if the account at the specified index is a part of static `account_keys` and was requested to be writable.
     pub fn is_static_writable_index(&self, key_index: usize) -> bool {
         let num_account_keys = self.account_keys.len();
@@ -138,11 +126,6 @@ impl VaultTransactionMessage {
         }
 
         false
-    }
-
-    /// Returns true if the account at the specified index was requested to be a signer.
-    pub fn is_signer_index(&self, key_index: usize) -> bool {
-        key_index < usize::from(self.num_signers)
     }
 }
 
@@ -412,9 +395,6 @@ impl MultisigExecuteTransactionAccounts {
         metas
     }
 }
-pub struct MultisigExecuteTransactionData {
-    pub args: MultisigExecuteTransactionArgs,
-}
 
 impl MultisigVoteOnProposalAccounts {
     pub fn to_account_metas(&self) -> Vec<AccountMeta> {
@@ -513,9 +493,7 @@ pub enum ProposalStatus {
     /// Proposal has been approved and is pending execution.
     Approved { timestamp: i64 },
     /// Proposal is being executed. This is a transient state that always transitions to `Executed` in the span of a single transaction.
-    #[deprecated(
-        note = "This status used to be used to prevent reentrancy attacks. It is no longer needed."
-    )]
+    /// Note: This status is no longer used for reentrancy protection but kept for on-chain data compatibility.
     Executing,
     /// Proposal has been executed.
     Executed { timestamp: i64 },

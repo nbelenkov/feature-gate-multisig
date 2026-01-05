@@ -1,7 +1,6 @@
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
-use solana_rent::Rent;
-use solana_system_interface::instruction::{allocate, assign, transfer};
+use solana_system_interface::instruction::{allocate, assign};
 
 /// The Feature Gate program ID
 pub const FEATURE_GATE_PROGRAM_ID: Pubkey =
@@ -26,63 +25,6 @@ impl Feature {
     pub const fn size_of() -> usize {
         FEATURE_ACCOUNT_SIZE
     }
-
-    /// Default Feature state (pending activation)
-    pub fn default() -> Self {
-        Self { activated_at: None }
-    }
-}
-
-/// Creates instructions to activate a feature gate
-///
-/// This function creates the necessary instructions to queue a feature for activation:
-/// 1. Transfer lamports to the feature account
-/// 2. Allocate space for the feature account
-/// 3. Assign the feature account to the Feature Gate program
-///
-/// # Arguments
-/// * `feature_id` - The public key of the feature to activate
-/// * `funding_address` - The public key of the account funding the feature activation
-/// * `rent` - Rent sysvar for calculating minimum balance
-///
-/// # Returns
-/// A vector of instructions to execute the feature activation
-pub fn activate_feature(
-    feature_id: &Pubkey,
-    funding_address: &Pubkey,
-    rent: &Rent,
-) -> Vec<Instruction> {
-    let lamports = rent.minimum_balance(Feature::size_of());
-    activate_feature_with_lamports(feature_id, funding_address, lamports)
-}
-
-/// Creates instructions to activate a feature gate with specific lamport amount
-///
-/// This function creates the necessary instructions to queue a feature for activation:
-/// 1. Transfer the specified lamports to the feature account
-/// 2. Allocate space for the feature account
-/// 3. Assign the feature account to the Feature Gate program
-///
-/// # Arguments
-/// * `feature_id` - The public key of the feature to activate
-/// * `funding_address` - The public key of the account funding the feature activation
-/// * `lamports` - The amount of lamports to transfer for rent exemption
-///
-/// # Returns
-/// A vector of instructions to execute the feature activation
-pub fn activate_feature_with_lamports(
-    feature_id: &Pubkey,
-    funding_address: &Pubkey,
-    lamports: u64,
-) -> Vec<Instruction> {
-    vec![
-        // Transfer lamports to feature account for rent exemption
-        transfer(funding_address, feature_id, lamports),
-        // Allocate space for the feature account
-        allocate(feature_id, Feature::size_of() as u64),
-        // Assign the account to the Feature Gate program
-        assign(feature_id, &FEATURE_GATE_PROGRAM_ID),
-    ]
 }
 
 /// Creates instructions to activate a feature gate where the feature account is already funded
@@ -137,26 +79,6 @@ pub fn revoke_pending_activation(feature_id: &Pubkey) -> Instruction {
     }
 }
 
-/// Creates a minimal instruction to activate a feature (convenience function)
-///
-/// This creates a simplified activation instruction using system rent for calculation.
-/// For more control over lamports, use `activate_feature_with_lamports` instead.
-///
-/// # Arguments
-/// * `feature_id` - The public key of the feature to activate
-/// * `funding_address` - The public key of the account funding the activation
-///
-/// # Returns
-/// A vector of instructions to execute the feature activation with default rent
-pub fn create_feature_activation(
-    feature_id: &Pubkey,
-    funding_address: &Pubkey,
-) -> Vec<Instruction> {
-    // Use a reasonable default for rent calculation
-    let rent = Rent::default();
-    activate_feature(feature_id, funding_address, &rent)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,35 +90,20 @@ mod tests {
     }
 
     #[test]
-    fn test_feature_default() {
-        let feature = Feature::default();
-        assert_eq!(feature.activated_at, None);
-    }
-
-    #[test]
-    fn test_activate_feature_instructions() {
+    fn test_activate_feature_funded_instructions() {
         let feature_id = Pubkey::new_unique();
-        let funding_address = Pubkey::new_unique();
-        let rent = Rent::default();
 
-        let instructions = activate_feature(&feature_id, &funding_address, &rent);
+        let instructions = activate_feature_funded(&feature_id);
 
-        assert_eq!(instructions.len(), 3);
-
-        // Check transfer instruction
-        let transfer_ix = &instructions[0];
-        assert_eq!(transfer_ix.program_id, system_program::id());
-        assert_eq!(transfer_ix.accounts.len(), 2);
-        assert_eq!(transfer_ix.accounts[0].pubkey, funding_address);
-        assert_eq!(transfer_ix.accounts[1].pubkey, feature_id);
+        assert_eq!(instructions.len(), 2);
 
         // Check allocate instruction
-        let allocate_ix = &instructions[1];
+        let allocate_ix = &instructions[0];
         assert_eq!(allocate_ix.program_id, system_program::id());
         assert_eq!(allocate_ix.accounts[0].pubkey, feature_id);
 
         // Check assign instruction
-        let assign_ix = &instructions[2];
+        let assign_ix = &instructions[1];
         assert_eq!(assign_ix.program_id, system_program::id());
         assert_eq!(assign_ix.accounts[0].pubkey, feature_id);
     }

@@ -22,4 +22,3 @@ pub const BASE_ACCOUNT_RETRY_DELAY_MS: u64 = 500;
 
 // Default network URLs
 pub const DEFAULT_DEVNET_URL: &str = "https://api.devnet.solana.com";
-pub const DEFAULT_MAINNET_URL: &str = "https://api.mainnet-beta.solana.com";

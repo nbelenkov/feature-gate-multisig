@@ -29,11 +29,6 @@ impl Output {
         println!("{}", msg.bright_yellow().bold());
     }
 
-    /// Subheader with cyan bold text
-    pub fn subheader(msg: &str) {
-        println!("{}", msg.bright_cyan().bold());
-    }
-
     /// Field display with cyan key and white value
     pub fn field(key: &str, value: &str) {
         println!("  {}: {}", key.cyan(), value.bright_white());
@@ -48,31 +43,6 @@ impl Output {
         );
     }
 
-    /// Process step with blue arrow
-    pub fn step(msg: &str) {
-        println!("{} {}", "📤".bright_blue(), msg);
-    }
-
-    /// Network status with globe icon
-    pub fn network(msg: &str) {
-        println!("🌐 {}", msg.bright_white());
-    }
-
-    /// Search/fetch with magnifying glass
-    pub fn search(msg: &str) {
-        println!("🔍 {}", msg.bright_white());
-    }
-
-    /// Target/address display with target icon
-    pub fn target(msg: &str) {
-        println!("🎯 {}", msg.bright_white());
-    }
-
-    /// Progress with rocket icon
-    pub fn progress(msg: &str) {
-        println!("🚀 {}", msg);
-    }
-
     /// Hint message with blue lightbulb
     pub fn hint(msg: &str) {
         println!("{} {}", "💡 Hint:".bright_blue(), msg);
@@ -81,21 +51,6 @@ impl Output {
     /// Separator line for sections
     pub fn separator() {
         println!();
-    }
-
-    /// Double separator with equals signs
-    pub fn section_break(title: &str) {
-        println!("{}", "═".repeat(80).bright_green());
-        println!("{}", title.bright_green().bold());
-        println!("{}", "═".repeat(80).bright_green());
-        println!();
-    }
-
-    /// Single line separator with dashes
-    pub fn subsection_break(title: &str) {
-        println!("{}", "─".repeat(50).bright_cyan());
-        println!("{}", title.bright_cyan().bold());
-        println!("{}", "─".repeat(50).bright_cyan());
     }
 
     /// Configuration display with special formatting
@@ -111,26 +66,8 @@ impl Output {
         );
     }
 
-    /// Transaction signature display
-    pub fn signature(label: &str, sig: &str) {
-        println!("  {}: {}", label.cyan(), sig.bright_cyan());
-    }
-
     /// Address display with consistent formatting
     pub fn address(label: &str, addr: &str) {
         println!("  {}: {}", label.cyan(), addr.bright_white());
-    }
-
-    /// Status indicators for various states
-    pub fn status_found(msg: &str) {
-        println!("✅ {}", msg.bright_green());
-    }
-
-    pub fn status_not_found(msg: &str) {
-        println!("❌ {}", msg.bright_red());
-    }
-
-    pub fn status_processing(msg: &str) {
-        println!("⚙️ {}", msg.bright_white());
     }
 }
