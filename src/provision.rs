@@ -10,7 +10,7 @@ use crate::squads::{
     SQUADS_MULTISIG_PROGRAM_ID,
 };
 
-use crate::utils::decode_permissions;
+use crate::utils::{decode_permissions, get_network_display};
 use borsh::BorshDeserialize;
 use colored::Colorize;
 use dialoguer::Confirm;
@@ -526,15 +526,7 @@ pub async fn create_multisig(
 
     let signature = send_and_confirm_transaction(&transaction, &rpc_client)?;
 
-    let network_display = if rpc_url.contains("devnet") {
-        "Devnet"
-    } else if rpc_url.contains("mainnet") {
-        "Mainnet"
-    } else if rpc_url.contains("testnet") {
-        "Testnet"
-    } else {
-        "Custom"
-    };
+    let network_display = get_network_display(&rpc_url);
 
     progress.finish_with_message(format!(
         "Multisig creation confirmed: {} ({})",

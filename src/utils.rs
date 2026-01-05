@@ -49,6 +49,19 @@ pub struct DeploymentResult {
     pub transaction_signature: String,
 }
 
+/// Returns a human-readable network name based on the RPC URL.
+pub fn get_network_display(rpc_url: &str) -> &'static str {
+    if rpc_url.contains("devnet") {
+        "Devnet"
+    } else if rpc_url.contains("mainnet") {
+        "Mainnet"
+    } else if rpc_url.contains("testnet") {
+        "Testnet"
+    } else {
+        "Custom"
+    }
+}
+
 // Config management functions
 pub fn get_config_path() -> Result<PathBuf> {
     let home_dir = dirs::home_dir().ok_or_else(|| eyre::eyre!("Could not find home directory"))?;
@@ -612,15 +625,7 @@ pub async fn create_and_send_paired_proposals(
     let signature = crate::provision::send_and_confirm_transaction(&transaction, &rpc_client)
         .map_err(|e| eyre::eyre!("Failed to send paired proposals: {}", e))?;
 
-    let network_display = if rpc_url.contains("devnet") {
-        "Devnet"
-    } else if rpc_url.contains("mainnet") {
-        "Mainnet"
-    } else if rpc_url.contains("testnet") {
-        "Testnet"
-    } else {
-        "Custom"
-    };
+    let network_display = get_network_display(rpc_url);
 
     progress.finish_with_message(format!(
         "Paired Proposals Created ({}) - Vault Index: {}, Config Index: {}\nSignature ({}): {}",
@@ -841,15 +846,7 @@ pub fn choose_network_mode(config: &Config, use_saved_config: bool) -> Result<(b
         available_networks.len().to_string().cyan()
     );
     for (i, network) in available_networks.iter().enumerate() {
-        let network_name = if network.contains("devnet") {
-            "Devnet"
-        } else if network.contains("testnet") {
-            "Testnet"
-        } else if network.contains("mainnet") {
-            "Mainnet"
-        } else {
-            "Custom"
-        };
+        let network_name = get_network_display(network);
         println!(
             "    {}: {} ({})",
             format!("Network {}", i + 1).cyan(),
@@ -979,15 +976,7 @@ pub async fn check_fee_payer_balance_on_networks(
     let mut network_errors = Vec::new();
 
     for network in networks {
-        let network_display = if network.contains("devnet") {
-            "Devnet"
-        } else if network.contains("mainnet") {
-            "Mainnet"
-        } else if network.contains("testnet") {
-            "Testnet"
-        } else {
-            "Custom"
-        };
+        let network_display = get_network_display(network);
 
         // Create RPC client for this network
         let rpc_client = crate::provision::create_rpc_client(network);
