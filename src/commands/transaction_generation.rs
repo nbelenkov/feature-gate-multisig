@@ -5,7 +5,6 @@ use solana_message::VersionedMessage;
 use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use std::str::FromStr;
 
 use crate::squads::{get_vault_pda, Multisig as SquadsMultisig, TransactionMessage};
 use crate::{
@@ -144,6 +143,33 @@ fn load_multisig_if_any(
     }
 }
 
+/// Permission bits for Squads multisig members
+const PERMISSION_INITIATE: u8 = 1 << 0;
+const PERMISSION_VOTE: u8 = 1 << 1;
+const PERMISSION_EXECUTE: u8 = 1 << 2;
+
+/// Check if a key is a member of the multisig with the required permission mask.
+/// Returns (is_member, has_permission).
+fn check_member_permission(ms: &SquadsMultisig, key: &Pubkey, permission_mask: u8) -> (bool, bool) {
+    let member = ms.members.iter().find(|m| m.key == *key);
+    let is_member = member.is_some();
+    let has_permission = member
+        .map(|m| (m.permissions.mask & permission_mask) == permission_mask)
+        .unwrap_or(false);
+    (is_member, has_permission)
+}
+
+/// Interactive confirmation - auto-confirms in E2E test mode
+fn confirm_action(prompt: &str, default: bool) -> bool {
+    if std::env::var("E2E_TEST_MODE").is_ok() {
+        return true;
+    }
+    Confirm::new(prompt)
+        .with_default(default)
+        .prompt()
+        .unwrap_or(false)
+}
+
 /// Common flow for creating and optionally executing a parent multisig proposal
 /// that operates on a child multisig.
 ///
@@ -174,12 +200,10 @@ async fn handle_parent_multisig_flow(
         .map_err(|e| eyre::eyre!("Failed to deserialize parent multisig: {}", e))?;
     let parent_next_index = parent_ms.transaction_index + 1;
 
-    // The fee payer must be a member of the parent multisig with Initiate permission to create proposals
-    let fee_payer_member = parent_ms
-        .members
-        .iter()
-        .find(|m| m.key == fee_payer_signer.pubkey());
-    if fee_payer_member.is_none() {
+    // The fee payer must be a member of the parent multisig with Initiate permission
+    let (is_member, has_initiate) =
+        check_member_permission(&parent_ms, &fee_payer_signer.pubkey(), PERMISSION_INITIATE);
+    if !is_member {
         output::Output::error(
             "Fee payer must be a member of the parent multisig to create/approve/execute proposals.",
         );
@@ -191,11 +215,7 @@ async fn handle_parent_multisig_flow(
             "Fee payer is not a member of the parent multisig"
         ));
     }
-
-    let fee_payer_has_initiate = fee_payer_member
-        .map(|m| (m.permissions.mask & (1 << 0)) != 0)
-        .unwrap_or(false);
-    if !fee_payer_has_initiate {
+    if !has_initiate {
         output::Output::error("Fee payer lacks Initiate permission on the parent multisig.");
         return Err(eyre::eyre!(
             "Fee payer missing Initiate permission on parent multisig"
@@ -215,22 +235,22 @@ async fn handle_parent_multisig_flow(
     // Check required permission based on operation type
     let (required_permission_mask, permission_name, action_description) = match &operation {
         ProposalAction::Approve => (
-            1 << 1, // Vote permission
+            PERMISSION_VOTE,
             "Vote",
             format!("Approve {} at index {}", kind.label(), proposal_index),
         ),
         ProposalAction::Reject => (
-            1 << 1, // Vote permission
+            PERMISSION_VOTE,
             "Vote",
             format!("Reject {} at index {}", kind.label(), proposal_index),
         ),
         ProposalAction::Execute => (
-            1 << 2, // Execute permission
+            PERMISSION_EXECUTE,
             "Execute",
             format!("Execute {} at index {}", kind.label(), proposal_index),
         ),
         ProposalAction::Create => (
-            (1 << 0) | (1 << 1), // Initiate + Vote required on child for creation
+            PERMISSION_INITIATE | PERMISSION_VOTE,
             "Initiate+Vote",
             format!(
                 "Create {} proposal at index {}",
@@ -242,10 +262,8 @@ async fn handle_parent_multisig_flow(
 
     let action_description = action_description.as_str();
 
-    let parent_vault_has_permission = child_ms.members.iter().any(|m| {
-        m.key == parent_vault_member
-            && (m.permissions.mask & required_permission_mask) == required_permission_mask
-    });
+    let (_, parent_vault_has_permission) =
+        check_member_permission(&child_ms, &parent_vault_member, required_permission_mask);
 
     if !parent_vault_has_permission {
         let parent_multisig_is_member = child_ms.members.iter().any(|m| m.key == parent_multisig);
@@ -298,16 +316,9 @@ async fn handle_parent_multisig_flow(
         }
     };
 
-    // Non-interactive mode for E2E tests - auto-confirm
-    if std::env::var("E2E_TEST_MODE").is_err() {
-        if !Confirm::new(confirmation_prompt)
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false)
-        {
-            output::Output::info("Parent multisig proposal creation cancelled.");
-            return Ok(());
-        }
+    if !confirm_action(confirmation_prompt, true) {
+        output::Output::info("Parent multisig proposal creation cancelled.");
+        return Ok(());
     }
 
     // Create the transaction message based on operation type
@@ -441,14 +452,7 @@ async fn handle_parent_multisig_flow(
     output::Output::field("Signature:", &signature);
 
     // Offer to approve the parent proposal immediately
-    // In E2E test mode, auto-approve
-    let should_approve = std::env::var("E2E_TEST_MODE").is_ok()
-        || Confirm::new("Approve this parent proposal now?")
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-
-    if should_approve {
+    if confirm_action("Approve this parent proposal now?", true) {
         let parent_proposal_index = parent_next_index;
         let approve_msg = create_parent_approve_proposal_message(
             program_id,
@@ -473,26 +477,14 @@ async fn handle_parent_multisig_flow(
             parent_proposal_index,
             &rpc_client,
         )?;
-        let is_fee_payer_member = parent_ms
-            .members
-            .iter()
-            .any(|m| m.key == fee_payer_signer.pubkey());
-        let has_execute_permission = parent_ms
-            .members
-            .iter()
-            .find(|m| m.key == fee_payer_signer.pubkey())
-            .map(|m| (m.permissions.mask & (1 << 2)) != 0)
-            .unwrap_or(false);
+        let (is_fee_payer_member, has_execute_permission) =
+            check_member_permission(&parent_ms, &fee_payer_signer.pubkey(), PERMISSION_EXECUTE);
 
-        if approved as u16 >= threshold && is_fee_payer_member && has_execute_permission {
-            // Auto-execute in E2E test mode
-            let should_execute = std::env::var("E2E_TEST_MODE").is_ok()
-                || Confirm::new("Execute this parent proposal now?")
-                    .with_default(true)
-                    .prompt()
-                    .unwrap_or(false);
-
-            if should_execute {
+        if approved as u16 >= threshold
+            && is_fee_payer_member
+            && has_execute_permission
+            && confirm_action("Execute this parent proposal now?", true)
+        {
                 let fresh_blockhash = rpc_client.get_latest_blockhash()?;
                 // Parent multisig always stores vault transactions, even when creating config on child
                 let exec_msg = create_execute_transaction_message(
@@ -536,7 +528,6 @@ async fn handle_parent_multisig_flow(
                         );
                     }
                 }
-            }
         } else if !is_fee_payer_member {
             output::Output::hint(
                 "Fee payer is not a member of the parent multisig; cannot auto-execute.",
@@ -576,7 +567,6 @@ pub async fn approve_common_feature_gate_proposal(
 
         let rpc_url = choose_network_from_config(config)?;
         let rpc_client = create_rpc_client(&rpc_url);
-        let blockhash = rpc_client.get_latest_blockhash()?;
 
         // Detect if voting_key is itself a Squads multisig (parent)
         let is_parent_multisig = load_multisig_if_any(&rpc_client, &voting_key)?.is_some();
@@ -711,15 +701,7 @@ pub async fn reject_common_feature_gate_proposal(
         &[fee_payer_signer.as_ref()],
     )?;
 
-    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
-        true
-    } else {
-        Confirm::new("Send this reject transaction now?")
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false)
-    };
-    if !should_send {
+    if !confirm_action("Send this reject transaction now?", true) {
         output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
         return Ok(());
     }
@@ -745,13 +727,8 @@ async fn execute_single_proposal_eoa(
         .map_err(|e| eyre::eyre!("Failed to fetch multisig account: {}", e))?;
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
-    let is_member = child_ms.members.iter().any(|m| m.key == *voting_key);
-    let has_execute = child_ms
-        .members
-        .iter()
-        .find(|m| m.key == *voting_key)
-        .map(|m| (m.permissions.mask & (1 << 2)) != 0)
-        .unwrap_or(false);
+
+    let (is_member, has_execute) = check_member_permission(&child_ms, voting_key, PERMISSION_EXECUTE);
     if !is_member {
         output::Output::error("Executor key is not a member of the multisig.");
         return Err(eyre::eyre!("Executor must be a multisig member"));
@@ -778,16 +755,7 @@ async fn execute_single_proposal_eoa(
         &[fee_payer_signer.as_ref()],
     )?;
 
-    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
-        true
-    } else {
-        Confirm::new(&format!("Execute proposal {} now?", proposal_index))
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false)
-    };
-
-    if !should_send {
+    if !confirm_action(&format!("Execute proposal {} now?", proposal_index), true) {
         output::Output::hint("Skipped sending execute transaction.");
         return Ok(());
     }
@@ -994,13 +962,8 @@ pub async fn execute_common_feature_gate_proposal(
         .map_err(|e| eyre::eyre!("Failed to fetch multisig account: {}", e))?;
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
-    let is_member = child_ms.members.iter().any(|m| m.key == voting_key);
-    let has_execute = child_ms
-        .members
-        .iter()
-        .find(|m| m.key == voting_key)
-        .map(|m| (m.permissions.mask & (1 << 2)) != 0)
-        .unwrap_or(false);
+
+    let (is_member, has_execute) = check_member_permission(&child_ms, &voting_key, PERMISSION_EXECUTE);
     if !is_member {
         output::Output::error("Executor key is not a member of the multisig.");
         return Err(eyre::eyre!("Executor must be a multisig member"));
@@ -1028,11 +991,7 @@ pub async fn execute_common_feature_gate_proposal(
     )?;
 
     // Confirm before sending on-chain (EOA execute path)
-    let should_send = Confirm::new("Send this execute transaction now?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false);
-    if !should_send {
+    if !confirm_action("Send this execute transaction now?", true) {
         output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
         return Ok(());
     }
@@ -1188,14 +1147,8 @@ pub async fn create_feature_gate_proposal(
     ));
 
     // Verify voting_key has Initiate permission
-    let is_member = feature_gate_ms.members.iter().any(|m| m.key == voting_key);
-    let has_initiate = feature_gate_ms
-        .members
-        .iter()
-        .find(|m| m.key == voting_key)
-        .map(|m| (m.permissions.mask & (1 << 0)) != 0)
-        .unwrap_or(false);
-
+    let (is_member, has_initiate) =
+        check_member_permission(&feature_gate_ms, &voting_key, PERMISSION_INITIATE);
     if !is_member {
         output::Output::error("Creator key is not a member of the multisig.");
         return Err(eyre::eyre!("Creator must be a multisig member"));
@@ -1529,19 +1482,14 @@ async fn approve_common_proposal(
     }
 
     // EOA voting path - approve proposal
-    // 1) Validate voter membership and Vote permission on the child multisig
+    // Validate voter membership and Vote permission on the child multisig
     let child_acc = rpc_client
         .get_account(&multisig_address)
         .map_err(|e| eyre::eyre!("Failed to fetch multisig: {}", e))?;
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
-    let is_member = child_ms.members.iter().any(|m| m.key == voting_key);
-    let has_vote = child_ms
-        .members
-        .iter()
-        .find(|m| m.key == voting_key)
-        .map(|m| (m.permissions.mask & (1 << 1)) != 0)
-        .unwrap_or(false);
+
+    let (is_member, has_vote) = check_member_permission(&child_ms, &voting_key, PERMISSION_VOTE);
     if !is_member {
         output::Output::error("Approver key is not a member of the multisig.");
         return Err(eyre::eyre!("Approver must be a multisig member"));
@@ -1572,15 +1520,7 @@ async fn approve_common_proposal(
         &[fee_payer_signer.as_ref()],
     )?;
 
-    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
-        true
-    } else {
-        Confirm::new("Send this approve transaction now?")
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false)
-    };
-    if !should_send {
+    if !confirm_action("Send this approve transaction now?", true) {
         output::Output::hint(
             "Skipped sending. You can submit the above encoded transaction manually or rerun to send.",
         );
@@ -1655,13 +1595,8 @@ pub async fn execute_common_config_change(
         .map_err(|e| eyre::eyre!("Failed to fetch multisig account: {}", e))?;
     let multisig: SquadsMultisig = BorshDeserialize::deserialize(&mut &multisig_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
-    let is_member = multisig.members.iter().any(|m| m.key == voting_key);
-    let has_execute = multisig
-        .members
-        .iter()
-        .find(|m| m.key == voting_key)
-        .map(|m| (m.permissions.mask & (1 << 2)) != 0)
-        .unwrap_or(false);
+
+    let (is_member, has_execute) = check_member_permission(&multisig, &voting_key, PERMISSION_EXECUTE);
     if !is_member {
         output::Output::error("Executor key is not a member of the multisig.");
         return Err(eyre::eyre!("Executor must be a multisig member"));
@@ -1677,8 +1612,6 @@ pub async fn execute_common_config_change(
 
     // Fresh blockhash and build execute message for the config transaction
     let blockhash = rpc_client.get_latest_blockhash()?;
-    let (proposal_pda, _) =
-        crate::squads::get_proposal_pda(&multisig_address, transaction_index, Some(&program_id));
     let exec_msg = create_execute_config_transaction_message(
         &program_id,
         &multisig_address,
@@ -1695,15 +1628,7 @@ pub async fn execute_common_config_change(
     )?;
 
     // Confirm before sending on-chain (EOA execute path)
-    let should_send = if std::env::var("E2E_TEST_MODE").is_ok() {
-        true
-    } else {
-        Confirm::new("Send this execute transaction now?")
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false)
-    };
-    if !should_send {
+    if !confirm_action("Send this execute transaction now?", true) {
         output::Output::hint("Skipped sending. You can submit the above encoded transaction manually or rerun to send.");
         return Ok(());
     }
