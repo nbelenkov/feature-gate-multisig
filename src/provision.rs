@@ -1,12 +1,11 @@
 use crate::constants::*;
 use crate::squads::{
     get_multisig_pda, get_program_config_pda, get_proposal_pda, get_transaction_pda, get_vault_pda,
-    Member, MultisigApproveProposalData, MultisigCreateArgsV2, MultisigCreateProposalAccounts,
-    MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
-    MultisigCreateV2Accounts, MultisigCreateV2Data, MultisigExecuteTransactionAccounts,
-    MultisigExecuteTransactionArgs, MultisigRejectProposalData, MultisigVoteOnProposalAccounts,
-    MultisigVoteOnProposalArgs, ProgramConfig, SmallVec, TransactionMessage,
-    VaultTransactionCreateArgs, VaultTransactionCreateArgsData,
+    Member, MultisigCreateArgsV2, MultisigCreateProposalAccounts, MultisigCreateProposalArgs,
+    MultisigCreateProposalData, MultisigCreateTransaction, MultisigCreateV2Accounts,
+    MultisigCreateV2Data, MultisigExecuteTransactionAccounts, MultisigExecuteTransactionArgs,
+    MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, ProgramConfig, SmallVec,
+    TransactionMessage, VaultTransactionCreateArgs, VaultTransactionCreateArgsData,
     CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR, EXECUTE_TRANSACTION_DISCRIMINATOR,
     SQUADS_MULTISIG_PROGRAM_ID,
 };
@@ -631,118 +630,41 @@ pub fn create_transaction_and_proposal_message(
     Ok((message, transaction_pda, proposal_pda))
 }
 
-pub fn create_common_activation_transaction_message(
+/// Create a vote (approve or reject) message for a proposal.
+/// Pass `PROPOSAL_APPROVE_DISCRIMINATOR` for approval or `PROPOSAL_REJECT_DISCRIMINATOR` for rejection.
+pub fn create_vote_proposal_message(
     program_id: &Pubkey,
-    feature_gate_multisig_address: &Pubkey,
+    multisig_address: &Pubkey,
     member_pubkey: &Pubkey,
     fee_payer_pubkey: &Pubkey,
-    recent_blockhash: Hash,
-    proposal_index: u64,
-) -> eyre::Result<Message> {
-    // Activation proposal index is 1 (proposal 0 is reserved for the initial create)
-    let (proposal_pda, _proposal_bump) = get_proposal_pda(
-        feature_gate_multisig_address,
-        proposal_index,
-        Some(program_id),
-    );
-
-    let account_keys = MultisigVoteOnProposalAccounts {
-        multisig: *feature_gate_multisig_address,
-        member: *member_pubkey,
-        proposal: proposal_pda,
-    };
-    let instruction_args = MultisigVoteOnProposalArgs { memo: None };
-    let instruction_data = MultisigApproveProposalData {
-        args: instruction_args,
-    };
-
-    let approve_instruction = Instruction::new_with_bytes(
-        *program_id,
-        &instruction_data.data(),
-        account_keys.to_account_metas(),
-    );
-
-    let message = Message::try_compile(
-        fee_payer_pubkey,
-        &[approve_instruction],
-        &[],
-        recent_blockhash,
-    )?;
-
-    Ok(message)
-}
-
-pub fn create_common_reject_transaction_message(
-    program_id: &Pubkey,
-    feature_gate_multisig_address: &Pubkey,
-    member_pubkey: &Pubkey,
-    fee_payer_pubkey: &Pubkey,
-    recent_blockhash: Hash,
-    proposal_index: u64,
-) -> eyre::Result<Message> {
-    let (proposal_pda, _proposal_bump) = get_proposal_pda(
-        feature_gate_multisig_address,
-        proposal_index,
-        Some(program_id),
-    );
-
-    let account_keys = MultisigVoteOnProposalAccounts {
-        multisig: *feature_gate_multisig_address,
-        member: *member_pubkey,
-        proposal: proposal_pda,
-    };
-    let instruction_args = MultisigVoteOnProposalArgs { memo: None };
-    let instruction_data = MultisigRejectProposalData {
-        args: instruction_args,
-    };
-
-    let reject_instruction = Instruction::new_with_bytes(
-        *program_id,
-        &instruction_data.data(),
-        account_keys.to_account_metas(),
-    );
-
-    let message = Message::try_compile(
-        fee_payer_pubkey,
-        &[reject_instruction],
-        &[],
-        recent_blockhash,
-    )?;
-
-    Ok(message)
-}
-
-/// Create a parent multisig approval message to approve its own proposal at `proposal_index`.
-pub fn create_parent_approve_proposal_message(
-    program_id: &Pubkey,
-    parent_multisig_address: &Pubkey,
-    parent_member_pubkey: &Pubkey,
-    fee_payer_pubkey: &Pubkey,
     proposal_index: u64,
     recent_blockhash: Hash,
+    discriminator: &[u8],
 ) -> eyre::Result<Message> {
     let (proposal_pda, _proposal_bump) =
-        get_proposal_pda(parent_multisig_address, proposal_index, Some(program_id));
+        get_proposal_pda(multisig_address, proposal_index, Some(program_id));
 
     let account_keys = MultisigVoteOnProposalAccounts {
-        multisig: *parent_multisig_address,
-        member: *parent_member_pubkey,
+        multisig: *multisig_address,
+        member: *member_pubkey,
         proposal: proposal_pda,
     };
-    let instruction_args = MultisigVoteOnProposalArgs { memo: None };
-    let instruction_data = MultisigApproveProposalData {
-        args: instruction_args,
-    };
 
-    let approve_instruction = Instruction::new_with_bytes(
+    // Build instruction data: discriminator + serialized args
+    let instruction_args = MultisigVoteOnProposalArgs { memo: None };
+    let mut instruction_data = Vec::new();
+    instruction_data.extend_from_slice(discriminator);
+    instruction_data.extend_from_slice(&borsh::to_vec(&instruction_args)?);
+
+    let vote_instruction = Instruction::new_with_bytes(
         *program_id,
-        &instruction_data.data(),
+        &instruction_data,
         account_keys.to_account_metas(),
     );
 
     let message = Message::try_compile(
         fee_payer_pubkey,
-        &[approve_instruction],
+        &[vote_instruction],
         &[],
         recent_blockhash,
     )?;

@@ -6,16 +6,18 @@ use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 
-use crate::squads::{get_vault_pda, Multisig as SquadsMultisig, TransactionMessage};
+use crate::squads::{
+    get_vault_pda, Multisig as SquadsMultisig, TransactionMessage,
+    PROPOSAL_APPROVE_DISCRIMINATOR, PROPOSAL_REJECT_DISCRIMINATOR,
+};
 use crate::{
     output,
     provision::{
         create_child_create_config_transaction_and_proposal_message,
         create_child_execute_config_transaction_message, create_child_execute_transaction_message,
-        create_common_activation_transaction_message, create_common_reject_transaction_message,
         create_execute_config_transaction_message, create_execute_transaction_message,
-        create_parent_approve_proposal_message, create_rpc_client,
-        create_transaction_and_proposal_message, get_proposal_status_and_threshold,
+        create_rpc_client, create_transaction_and_proposal_message,
+        create_vote_proposal_message, get_proposal_status_and_threshold,
     },
     utils::{
         choose_network_from_config, create_child_vote_approve_transaction_message,
@@ -157,6 +159,38 @@ fn check_member_permission(ms: &SquadsMultisig, key: &Pubkey, permission_mask: u
         .map(|m| (m.permissions.mask & permission_mask) == permission_mask)
         .unwrap_or(false);
     (is_member, has_permission)
+}
+
+/// Verify a key has the required permission, returning descriptive error if not.
+fn verify_member_permission(
+    ms: &SquadsMultisig,
+    key: &Pubkey,
+    permission: u8,
+    role_name: &str,
+) -> Result<()> {
+    let (is_member, has_permission) = check_member_permission(ms, key, permission);
+    if !is_member {
+        output::Output::error(&format!("{} key is not a member of the multisig.", role_name));
+        return Err(eyre::eyre!("{} must be a multisig member", role_name));
+    }
+    if !has_permission {
+        let perm_name = match permission {
+            PERMISSION_VOTE => "Vote",
+            PERMISSION_EXECUTE => "Execute",
+            PERMISSION_INITIATE => "Initiate",
+            _ => "required",
+        };
+        output::Output::error(&format!(
+            "{} key does not have {} permission.",
+            role_name, perm_name
+        ));
+        return Err(eyre::eyre!(
+            "Missing {} permission for {}",
+            perm_name,
+            role_name.to_lowercase()
+        ));
+    }
+    Ok(())
 }
 
 /// Interactive confirmation - auto-confirms in E2E test mode
@@ -454,13 +488,14 @@ async fn handle_parent_multisig_flow(
     // Offer to approve the parent proposal immediately
     if confirm_action("Approve this parent proposal now?", true) {
         let parent_proposal_index = parent_next_index;
-        let approve_msg = create_parent_approve_proposal_message(
+        let approve_msg = create_vote_proposal_message(
             program_id,
             &parent_multisig,
             &fee_payer_signer.pubkey(),
             &fee_payer_signer.pubkey(),
             parent_proposal_index,
             blockhash,
+            PROPOSAL_APPROVE_DISCRIMINATOR,
         )?;
         let approve_tx = VersionedTransaction::try_new(
             VersionedMessage::V0(approve_msg),
@@ -703,13 +738,14 @@ pub async fn reject_common_feature_gate_proposal(
     }
 
     let blockhash = rpc_client.get_latest_blockhash()?;
-    let transaction_message = create_common_reject_transaction_message(
+    let transaction_message = create_vote_proposal_message(
         &program_id,
         &feature_gate_multisig_address,
         &voting_key,
         &fee_payer_signer.pubkey(),
-        blockhash,
         proposal_index,
+        blockhash,
+        PROPOSAL_REJECT_DISCRIMINATOR,
     )
     .map_err(|e| {
         eyre::eyre!(
@@ -751,15 +787,7 @@ async fn execute_single_proposal_eoa(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_execute) = check_member_permission(&child_ms, voting_key, PERMISSION_EXECUTE);
-    if !is_member {
-        output::Output::error("Executor key is not a member of the multisig.");
-        return Err(eyre::eyre!("Executor must be a multisig member"));
-    }
-    if !has_execute {
-        output::Output::error("Executor key does not have Execute permission.");
-        return Err(eyre::eyre!("Missing Execute permission for executor"));
-    }
+    verify_member_permission(&child_ms, voting_key, PERMISSION_EXECUTE, "Executor")?;
 
     // Build and send execute transaction
     let blockhash = rpc_client.get_latest_blockhash()?;
@@ -815,15 +843,7 @@ async fn approve_paired_proposals_eoa(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_vote) = check_member_permission(&child_ms, voting_key, PERMISSION_VOTE);
-    if !is_member {
-        output::Output::error("Approver key is not a member of the multisig.");
-        return Err(eyre::eyre!("Approver must be a multisig member"));
-    }
-    if !has_vote {
-        output::Output::error("Approver key does not have Vote permission.");
-        return Err(eyre::eyre!("Missing Vote permission for approver"));
-    }
+    verify_member_permission(&child_ms, voting_key, PERMISSION_VOTE, "Approver")?;
 
     // Build and send paired approval transaction
     let blockhash = rpc_client.get_latest_blockhash()?;
@@ -872,15 +892,7 @@ async fn reject_paired_proposals_eoa(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_vote) = check_member_permission(&child_ms, voting_key, PERMISSION_VOTE);
-    if !is_member {
-        output::Output::error("Rejector key is not a member of the multisig.");
-        return Err(eyre::eyre!("Rejector must be a multisig member"));
-    }
-    if !has_vote {
-        output::Output::error("Rejector key does not have Vote permission.");
-        return Err(eyre::eyre!("Missing Vote permission for rejector"));
-    }
+    verify_member_permission(&child_ms, voting_key, PERMISSION_VOTE, "Rejector")?;
 
     // Build and send paired rejection transaction
     let blockhash = rpc_client.get_latest_blockhash()?;
@@ -1125,15 +1137,7 @@ pub async fn execute_common_feature_gate_proposal(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_execute) = check_member_permission(&child_ms, &voting_key, PERMISSION_EXECUTE);
-    if !is_member {
-        output::Output::error("Executor key is not a member of the multisig.");
-        return Err(eyre::eyre!("Executor must be a multisig member"));
-    }
-    if !has_execute {
-        output::Output::error("Executor key does not have Execute permission.");
-        return Err(eyre::eyre!("Missing Execute permission for executor"));
-    }
+    verify_member_permission(&child_ms, &voting_key, PERMISSION_EXECUTE, "Executor")?;
 
     // Fresh blockhash and build execute message for the proposal
     let blockhash = rpc_client.get_latest_blockhash()?;
@@ -1309,16 +1313,7 @@ pub async fn create_feature_gate_proposal(
     ));
 
     // Verify voting_key has Initiate permission
-    let (is_member, has_initiate) =
-        check_member_permission(&feature_gate_ms, &voting_key, PERMISSION_INITIATE);
-    if !is_member {
-        output::Output::error("Creator key is not a member of the multisig.");
-        return Err(eyre::eyre!("Creator must be a multisig member"));
-    }
-    if !has_initiate {
-        output::Output::error("Creator key does not have Initiate permission.");
-        return Err(eyre::eyre!("Missing Initiate permission for creator"));
-    }
+    verify_member_permission(&feature_gate_ms, &voting_key, PERMISSION_INITIATE, "Creator")?;
 
     // Verify voting_key is the same as fee_payer in EOA mode
     if voting_key != fee_payer_signer.pubkey() {
@@ -1651,23 +1646,16 @@ async fn approve_common_proposal(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_vote) = check_member_permission(&child_ms, &voting_key, PERMISSION_VOTE);
-    if !is_member {
-        output::Output::error("Approver key is not a member of the multisig.");
-        return Err(eyre::eyre!("Approver must be a multisig member"));
-    }
-    if !has_vote {
-        output::Output::error("Approver key does not have Vote permission.");
-        return Err(eyre::eyre!("Missing Vote permission for approver"));
-    }
+    verify_member_permission(&child_ms, &voting_key, PERMISSION_VOTE, "Approver")?;
 
-    let approve_msg = create_common_activation_transaction_message(
+    let approve_msg = create_vote_proposal_message(
         &program_id,
         &multisig_address,
         &voting_key,
         &fee_payer_signer.pubkey(),
-        blockhash,
         proposal_index,
+        blockhash,
+        PROPOSAL_APPROVE_DISCRIMINATOR,
     )
     .map_err(|e| {
         eyre::eyre!(
@@ -1758,15 +1746,7 @@ pub async fn execute_common_config_change(
     let multisig: SquadsMultisig = BorshDeserialize::deserialize(&mut &multisig_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    let (is_member, has_execute) = check_member_permission(&multisig, &voting_key, PERMISSION_EXECUTE);
-    if !is_member {
-        output::Output::error("Executor key is not a member of the multisig.");
-        return Err(eyre::eyre!("Executor must be a multisig member"));
-    }
-    if !has_execute {
-        output::Output::error("Executor key does not have Execute permission.");
-        return Err(eyre::eyre!("Missing Execute permission for executor"));
-    }
+    verify_member_permission(&multisig, &voting_key, PERMISSION_EXECUTE, "Executor")?;
 
     output::Output::header("Config Execute - Signer Details");
     output::Output::field("Fee payer", &fee_payer_signer.pubkey().to_string());
