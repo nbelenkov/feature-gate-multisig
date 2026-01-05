@@ -151,7 +151,7 @@ async fn deploy_to_single_network(
     // NOTE: Index 3 (Revocation) and Index 4 (Restore Threshold) are NOT created here
     // because they would become stale after Index 2 executes (config change).
     // They must be created dynamically via `create_feature_gate_proposal` command.
-    let activation_message = create_feature_activation_transaction_message(vault_address);
+    let activation_message = create_feature_activation_transaction_message(vault_address)?;
     crate::utils::create_and_send_paired_proposals(
         rpc_url,
         fee_payer_signer,

@@ -1,7 +1,7 @@
 use crate::constants::*;
 use crate::feature_gate_program::activate_feature_funded;
-use crate::provision::create_rpc_client;
-use crate::squads::{CompiledInstruction, Member, Permissions, TransactionMessage};
+use crate::provision::{build_squads_transaction_message, create_rpc_client};
+use crate::squads::{Member, Permissions, TransactionMessage};
 use colored::*;
 use dirs;
 use eyre::Result;
@@ -289,10 +289,10 @@ pub fn create_child_vote_approve_transaction_message(
     child_multisig: Pubkey,
     child_tx_index: u64,
     parent_member_pubkey: Pubkey,
-) -> TransactionMessage {
+) -> Result<TransactionMessage> {
     use crate::squads::{
         get_proposal_pda, MultisigApproveProposalData, MultisigVoteOnProposalAccounts,
-        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+        MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
     };
     use solana_instruction::Instruction;
 
@@ -319,26 +319,8 @@ pub fn create_child_vote_approve_transaction_message(
         accounts.to_account_metas(),
     );
 
-    // Fixed account structure for child approve:
-    // Account keys array: [parent_member, proposal, child_multisig, program]
-    // Instruction expects: [multisig=2, member=0, proposal=1]
-    TransactionMessage {
-        num_signers: 1,
-        num_writable_signers: 1,
-        num_writable_non_signers: 1,
-        account_keys: SmallVec::from(vec![
-            parent_member_pubkey,
-            proposal_pda,
-            child_multisig,
-            SQUADS_MULTISIG_PROGRAM_ID,
-        ]),
-        instructions: SmallVec::from(vec![CompiledInstruction {
-            program_id_index: 3,
-            account_indexes: SmallVec::from(vec![2, 0, 1]), // [multisig, member, proposal]
-            data: SmallVec::from(ix.data),
-        }]),
-        address_table_lookups: SmallVec::from(vec![]),
-    }
+    // Use centralized helper - parent_member_pubkey is the signer (vault PDA)
+    build_squads_transaction_message(&[ix], &parent_member_pubkey)
 }
 
 /// Build a TransactionMessage for a parent multisig to reject a child's proposal.
@@ -346,10 +328,10 @@ pub fn create_child_vote_reject_transaction_message(
     child_multisig: Pubkey,
     child_tx_index: u64,
     parent_member_pubkey: Pubkey,
-) -> TransactionMessage {
+) -> Result<TransactionMessage> {
     use crate::squads::{
         get_proposal_pda, MultisigRejectProposalData, MultisigVoteOnProposalAccounts,
-        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+        MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
     };
     use solana_instruction::Instruction;
 
@@ -374,84 +356,17 @@ pub fn create_child_vote_reject_transaction_message(
         accounts.to_account_metas(),
     );
 
-    // Fixed account structure for child reject:
-    // Account keys array: [parent_member (writable signer), proposal, child_multisig, program]
-    // Instruction expects: [multisig=2, member=0, proposal=1]
-    TransactionMessage {
-        num_signers: 1,
-        num_writable_signers: 1, // member must be writable
-        num_writable_non_signers: 1,
-        account_keys: SmallVec::from(vec![
-            parent_member_pubkey,
-            proposal_pda,
-            child_multisig,
-            SQUADS_MULTISIG_PROGRAM_ID,
-        ]),
-        instructions: SmallVec::from(vec![CompiledInstruction {
-            program_id_index: 3,
-            account_indexes: SmallVec::from(vec![2, 0, 1]), // [multisig, member, proposal]
-            data: SmallVec::from(ix.data),
-        }]),
-        address_table_lookups: SmallVec::from(vec![]),
-    }
+    // Use centralized helper - parent_member_pubkey is the signer (vault PDA)
+    build_squads_transaction_message(&[ix], &parent_member_pubkey)
 }
 
 // Transaction creation functions
-pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> TransactionMessage {
-    use crate::squads::SmallVec;
-
+pub fn create_feature_activation_transaction_message(feature_id: Pubkey) -> Result<TransactionMessage> {
     // Build activation flow without any funding transfer: allocate + assign only.
     let instructions = activate_feature_funded(&feature_id);
 
-    // Account keys: feature signer first, then programs
-    let mut account_keys: Vec<Pubkey> = Vec::with_capacity(3);
-    account_keys.push(feature_id); // signer, writable
-    account_keys.push(solana_system_interface::program::ID);
-    account_keys.push(crate::feature_gate_program::FEATURE_GATE_PROGRAM_ID);
-
-    // Compile instructions into CompiledInstructions with SmallVec
-    let mut compiled_instructions = Vec::new();
-
-    for instruction in instructions {
-        // Find program_id index in account_keys
-        let program_id_index = account_keys
-            .iter()
-            .position(|key| *key == instruction.program_id)
-            .unwrap_or_else(|| {
-                account_keys.push(instruction.program_id);
-                account_keys.len() - 1
-            }) as u8;
-
-        // Map account pubkeys to indices
-        let account_indexes: Vec<u8> = instruction
-            .accounts
-            .iter()
-            .map(|account_meta| {
-                account_keys
-                    .iter()
-                    .position(|key| *key == account_meta.pubkey)
-                    .unwrap_or_else(|| {
-                        account_keys.push(account_meta.pubkey);
-                        account_keys.len() - 1
-                    }) as u8
-            })
-            .collect();
-
-        compiled_instructions.push(CompiledInstruction {
-            program_id_index,
-            account_indexes: SmallVec::from(account_indexes),
-            data: SmallVec::from(instruction.data),
-        });
-    }
-
-    TransactionMessage {
-        num_signers: 1,
-        num_writable_signers: 1,
-        num_writable_non_signers: 0,
-        account_keys: SmallVec::from(account_keys),
-        instructions: SmallVec::from(compiled_instructions),
-        address_table_lookups: SmallVec::from(vec![]),
-    }
+    // Use centralized helper - feature_id is the signer (vault PDA)
+    build_squads_transaction_message(&instructions, &feature_id)
 }
 
 /// Create and send PAIRED proposals (vault + config) in a single atomic transaction.

@@ -358,7 +358,7 @@ async fn handle_parent_multisig_flow(
                 feature_gate_multisig_address,
                 proposal_index,
                 parent_vault_member,
-            )
+            )?
         }
         (
             ProposalAction::Approve,
@@ -378,7 +378,7 @@ async fn handle_parent_multisig_flow(
                 feature_gate_multisig_address,
                 proposal_index,
                 parent_vault_member,
-            )
+            )?
         }
         (
             ProposalAction::Execute,
@@ -1191,7 +1191,7 @@ pub async fn create_feature_gate_proposal(
         );
 
         let vault_tx_message =
-            crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
+            crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind)?;
 
         // Pass the raw vault transaction message - handle_parent_multisig_flow will wrap it
         // in create_child_create_vault_transaction_and_proposal_message
@@ -1277,7 +1277,7 @@ pub async fn create_feature_gate_proposal(
     }
 
     let vault_message =
-        crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind);
+        crate::provision::create_feature_gate_transaction_message(feature_id, feature_id, kind)?;
 
     // Create BOTH proposals in ONE transaction using bundled creation
     let config_index = next_tx_index + 1;
