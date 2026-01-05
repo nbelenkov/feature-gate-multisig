@@ -364,30 +364,35 @@ fn print_deployment_summary(
 
         println!("\n{}", "⚙️ Pre-Created Proposals".bright_white().bold());
         println!();
-        println!("  {} Index 1: {}", "🔹".bright_cyan(), "Activation".bright_white().bold());
-        println!("     Address: {}", activation_proposal_pda.to_string().bright_green());
+        println!(
+            "  {} Index 1: {}",
+            "🔹".bright_cyan(),
+            "Activation".bright_white().bold()
+        );
+        println!(
+            "     Address: {}",
+            activation_proposal_pda.to_string().bright_green()
+        );
         println!("     Type: Vault Transaction");
         println!("     Requires: {}/{} approvals", threshold, threshold);
         println!();
 
-        println!("  {} Index 2: {}", "🔹".bright_cyan(), "Lower Threshold".bright_white().bold());
-        println!("     Address: {}", lower_threshold_proposal_pda.to_string().bright_green());
+        println!(
+            "  {} Index 2: {}",
+            "🔹".bright_cyan(),
+            "Lower Threshold".bright_white().bold()
+        );
+        println!(
+            "     Address: {}",
+            lower_threshold_proposal_pda.to_string().bright_green()
+        );
         println!("     Type: Config Transaction");
         println!("     Requires: {}/{} approvals", threshold, threshold);
-        println!("     {}: Execute BEFORE revocation to enable 1-approval emergency revocation", "Note".yellow());
+        println!(
+            "     {}: Execute BEFORE revocation to enable 1-approval emergency revocation",
+            "Note".yellow()
+        );
         println!();
-
-        println!("\n{}", "⚙️ Revocation Workflow".bright_white().bold());
-        println!();
-        println!("  {}: Revocation proposals (Index 3 + 4) must be created dynamically", "Important".yellow().bold());
-        println!("  after Index 2 executes, otherwise they become stale.");
-        println!();
-        println!("  Steps:");
-        println!("    1. Execute Index 2 to lower threshold to 1");
-        println!("    2. Create Index 3 (Revocation) - requires 1 approval");
-        println!("    3. Execute Index 3 to revoke the feature");
-        println!("    4. Create Index 4 (Restore Threshold) - requires 1 approval");
-        println!("    5. Execute Index 4 to restore threshold to {}", threshold);
 
         if deployments.len() > 1 {
             println!("\n{}", "─".repeat(50).bright_cyan());

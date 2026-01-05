@@ -88,6 +88,24 @@ async fn build_fixture() -> Fixture {
                 .expect("create parent multisig");
 
         let vault_pda = get_vault_pda(&multisig_pda, 0, None).0;
+
+        // Fund the parent vault with SOL so it can pay rent when creating config transactions
+        let fund_vault_ix = solana_system_interface::instruction::transfer(
+            &creator.pubkey(),
+            &vault_pda,
+            1_000_000_000, // 1 SOL
+        );
+        let recent_blockhash = client.get_latest_blockhash().expect("get blockhash");
+        let fund_tx = solana_transaction::Transaction::new_signed_with_payer(
+            &[fund_vault_ix],
+            Some(&creator.pubkey()),
+            &[&creator],
+            recent_blockhash,
+        );
+        client
+            .send_and_confirm_transaction(&fund_tx)
+            .expect("fund parent vault");
+
         parent_multisigs.push(multisig_pda);
         parent_vaults.push(vault_pda);
 
@@ -244,6 +262,36 @@ async fn rpc_e2e_1_activate_feature_gate() {
     );
 
     println!("✅ Feature gate activation E2E test completed successfully!");
+
+    // Debug: Check the status of Index 2
+    println!("\n🐛 Debug: Checking Index 2 status after test 1");
+    let (proposal_2_pda, _) = get_proposal_pda(&fixture.child_multisig, 2, None);
+    if let Ok(proposal_2_account) = client.get_account(&proposal_2_pda) {
+        let proposal_2: Proposal =
+            BorshDeserialize::deserialize(&mut &proposal_2_account.data[8..])
+                .expect("deserialize proposal 2");
+        match proposal_2.status {
+            ProposalStatus::Draft { .. } => println!("Index 2 status: Draft"),
+            ProposalStatus::Active { .. } => println!("Index 2 status: Active"),
+            ProposalStatus::Approved { .. } => println!("Index 2 status: Approved"),
+            ProposalStatus::Rejected { .. } => println!("Index 2 status: Rejected"),
+            ProposalStatus::Cancelled { .. } => println!("Index 2 status: Cancelled"),
+            ProposalStatus::Executed { .. } => println!("Index 2 status: Executed"),
+            ProposalStatus::Executing => println!("Index 2 status: Executing"),
+        }
+        println!("Index 2 approvals: {}", proposal_2.approved.len());
+    } else {
+        println!("Index 2 proposal does not exist!");
+    }
+
+    // Debug: Check threshold
+    let child_ms_account_final = client
+        .get_account(&fixture.child_multisig)
+        .expect("fetch child multisig");
+    let child_ms_final: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_account_final.data[8..])
+            .expect("deserialize child multisig");
+    println!("Final threshold after test 1: {}", child_ms_final.threshold);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -258,60 +306,34 @@ async fn rpc_e2e_2_revoke_feature_gate() {
     );
     println!("   Feature gate ID (vault): {}", fixture.child_vault);
 
-    // Step 1: Lower threshold from 3 to 1 (Index 2 - Config transaction)
-    println!("\nStep 1: Approve and execute Index 2 (Lower Threshold to 1)");
-    let lower_threshold_index = 2u64;
-
-    // Approve with 3 members (threshold is currently 3)
-    for i in 0..3 {
-        let voter = fixture.parent_multisigs[i];
-        let keypair_path = &fixture.parent_key_paths[i];
-
-        approve_common_feature_gate_proposal(
-            &fixture.config,
-            fixture.child_multisig,
-            voter,
-            keypair_path.clone(),
-            None,
-            lower_threshold_index,
-            TransactionKind::Rekey, // Config transaction
-        )
-        .await
-        .expect("approve lower threshold proposal");
-
-        println!("✅ Approver {} approved Index 2 (Lower Threshold)", i + 1);
-    }
-
-    // Execute Index 2
-    execute_common_feature_gate_proposal(
-        &fixture.config,
-        fixture.child_multisig,
-        fixture.parent_multisigs[2],
-        fixture.parent_key_paths[2].clone(),
-        None,
-        lower_threshold_index,
-        TransactionKind::Rekey,
-    )
-    .await
-    .expect("execute lower threshold proposal");
-
-    println!("✅ Index 2 executed - Threshold lowered to 1");
-
-    // Verify threshold is now 1
+    // Step 1: Verify Index 2 already executed by test 1 (threshold should be 1)
+    println!("\nStep 1: Verify threshold is 1 (Index 2 was executed by test 1)");
     let child_ms_account = client
         .get_account(&fixture.child_multisig)
         .expect("fetch child multisig");
     let child_ms: feature_gate_multisig_tool::squads::Multisig =
         BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
             .expect("deserialize child multisig");
-    assert_eq!(child_ms.threshold, 1, "threshold should be 1 after Index 2");
-    println!("✅ Verified: Threshold is now 1");
+
+    assert_eq!(
+        child_ms.threshold, 1,
+        "threshold should be 1 after test 1 executed Index 2"
+    );
+    println!("✅ Verified: Threshold is 1");
 
     // Step 2: Create revocation proposal dynamically (after threshold is 1)
-    println!("\nStep 2: Create revocation proposal (Index 3) after threshold is lowered");
-    let revocation_index = child_ms.transaction_index + 1;
+    println!("\nStep 2: Create revocation proposal after threshold is lowered");
 
-    // Create revocation proposal via parent multisig
+    // Fetch current transaction index before creation
+    let child_ms_account = client
+        .get_account(&fixture.child_multisig)
+        .expect("fetch child multisig for index");
+    let child_ms_before: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
+            .expect("deserialize child multisig");
+    let revocation_index = child_ms_before.transaction_index + 1;
+
+    // Create revocation proposal via parent multisig (creates both vault and config proposals)
     create_feature_gate_proposal(
         &fixture.config,
         fixture.child_multisig,
@@ -323,7 +345,48 @@ async fn rpc_e2e_2_revoke_feature_gate() {
     .await
     .expect("create revoke proposal dynamically");
 
-    println!("✅ Revocation proposal created at index {}", revocation_index);
+    println!(
+        "✅ Revocation proposals created at indices {} (vault) and {} (config)",
+        revocation_index,
+        revocation_index + 1
+    );
+
+    // Debug: Verify both proposals exist and check transaction_index
+    println!("\n🐛 Debug: Verifying both proposals exist after creation");
+
+    // Check transaction_index
+    let child_ms_after = client
+        .get_account(&fixture.child_multisig)
+        .expect("fetch child multisig after creation");
+    let child_ms_data: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_after.data[8..])
+            .expect("deserialize child multisig after creation");
+    println!(
+        "Transaction index after creation: {}",
+        child_ms_data.transaction_index
+    );
+
+    let (vault_prop_pda, _) = get_proposal_pda(&fixture.child_multisig, revocation_index, None);
+    let (config_prop_pda, _) =
+        get_proposal_pda(&fixture.child_multisig, revocation_index + 1, None);
+
+    if client.get_account(&vault_prop_pda).is_ok() {
+        println!("✅ Vault proposal (Index {}) exists", revocation_index);
+    } else {
+        println!(
+            "❌ Vault proposal (Index {}) does NOT exist!",
+            revocation_index
+        );
+    }
+
+    if client.get_account(&config_prop_pda).is_ok() {
+        println!("✅ Config proposal (Index {}) exists", revocation_index + 1);
+    } else {
+        println!(
+            "❌ Config proposal (Index {}) does NOT exist!",
+            revocation_index + 1
+        );
+    }
 
     // Step 3: Approve revocation with only 1 approval (threshold is now 1)
     println!("\nStep 3: Approve revocation with only 1 approval");
@@ -362,12 +425,66 @@ async fn rpc_e2e_2_revoke_feature_gate() {
         _ => panic!("Expected proposal to be Approved"),
     }
 
+    let (proposal_pda, _) = get_proposal_pda(&fixture.child_multisig, revocation_index + 1, None);
+    let proposal_account = client
+        .get_account(&proposal_pda)
+        .expect("proposal account should exist");
+    let proposal: Proposal = BorshDeserialize::deserialize(&mut &proposal_account.data[8..])
+        .expect("deserialize proposal");
+
+    assert_eq!(
+        proposal.approved.len(),
+        1,
+        "config change proposal should have 1 approval"
+    );
+    match proposal.status {
+        ProposalStatus::Approved { timestamp: _ } => {
+            println!("✅ Proposal status: Approved with 1 approval (threshold is 1)");
+        }
+        _ => panic!("Expected proposal to be Approved"),
+    }
+
+    // Step 4: Execute the revocation (this should also execute the threshold restoration)
+    println!("\nStep 4: Execute revocation (should also restore threshold to 3)");
+
+    execute_common_feature_gate_proposal(
+        &fixture.config,
+        fixture.child_multisig,
+        fixture.parent_multisigs[0],
+        fixture.parent_key_paths[0].clone(),
+        None,
+        revocation_index,
+        TransactionKind::Revoke,
+    )
+    .await
+    .expect("execute revoke proposal");
+
+    println!("✅ Revocation executed!");
+
+    // Verify threshold was restored to 3
+    let child_ms_final = client
+        .get_account(&fixture.child_multisig)
+        .expect("fetch child multisig");
+    let child_ms_data: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_final.data[8..])
+            .expect("deserialize child multisig");
+
+    assert_eq!(
+        child_ms_data.threshold, 3,
+        "threshold should be restored to 3 after revocation execution"
+    );
+    println!("✅ Threshold restored to 3");
+
     println!("\n✅ Feature gate revocation E2E test completed successfully!");
     println!("   Demonstrated:");
     println!("     - Activation requires {} approvals (Index 1)", 3);
     println!("     - Lower threshold requires {} approvals (Index 2)", 3);
     println!("     - Revocation proposal created dynamically after threshold lowered");
-    println!("     - Revocation executed with only 1 approval (Index {})!", revocation_index);
+    println!(
+        "     - Revocation approved and executed with only 1 approval (Index {})!",
+        revocation_index
+    );
+    println!("     - Threshold restored to 3 after revocation execution");
     println!();
     println!("   This proves emergency feature revocation works with 1 approval!");
 }
@@ -390,9 +507,11 @@ async fn rpc_e2e_3_reject_activation() {
     let child_ms: feature_gate_multisig_tool::squads::Multisig =
         BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
             .expect("deserialize child multisig for reject test");
-    let proposal_index = child_ms.transaction_index + 1;
+    let vault_proposal_index = child_ms.transaction_index + 1;
+    let config_proposal_index = vault_proposal_index + 1;
 
     // Create a new activation proposal via parent[0]
+    // NOTE: This now creates PAIRED proposals (vault + config) at indices N and N+1
     create_feature_gate_proposal(
         &fixture.config,
         fixture.child_multisig,
@@ -405,9 +524,12 @@ async fn rpc_e2e_3_reject_activation() {
     .expect("create activation proposal for rejection");
 
     println!(
-        "✅ Activation proposal created at index {} for rejection test",
-        proposal_index
+        "✅ Activation proposals created at indices {} (vault) and {} (config) for rejection test",
+        vault_proposal_index, config_proposal_index
     );
+
+    // We only need to reject the vault proposal (the main activation)
+    let proposal_index = vault_proposal_index;
 
     // Reject from one parent multisig and the EOA (2 rejections needed for 4 members, threshold 3)
     let parent_multisig_pda = fixture.parent_multisigs[0];
@@ -492,9 +614,11 @@ async fn rpc_e2e_4_reject_revocation() {
     let child_ms: feature_gate_multisig_tool::squads::Multisig =
         BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
             .expect("deserialize child multisig for revoke rejection test");
-    let proposal_index = child_ms.transaction_index + 1;
+    let vault_proposal_index = child_ms.transaction_index + 1;
+    let config_proposal_index = vault_proposal_index + 1;
 
     // Create a new revocation proposal via parent[2] (skip EOA at index 1)
+    // NOTE: This now creates PAIRED proposals (vault + config) at indices N and N+1
     create_feature_gate_proposal(
         &fixture.config,
         fixture.child_multisig,
@@ -507,9 +631,12 @@ async fn rpc_e2e_4_reject_revocation() {
     .expect("create revocation proposal for rejection");
 
     println!(
-        "✅ Revocation proposal created at index {} for rejection test (via parent 3)",
-        proposal_index
+        "✅ Revocation proposals created at indices {} (vault) and {} (config) for rejection test (via parent 3)",
+        vault_proposal_index, config_proposal_index
     );
+
+    // We only need to reject the vault proposal (the main revocation)
+    let proposal_index = vault_proposal_index;
 
     // Reject from one parent multisig and the EOA (2 rejections needed for 4 members, threshold 3)
     let parent_multisig_pda = fixture.parent_multisigs[0];

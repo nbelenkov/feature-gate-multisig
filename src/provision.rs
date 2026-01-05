@@ -40,21 +40,37 @@ pub fn create_rpc_client(url: &str) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::confirmed())
 }
 
+/// Result struct for build_account_groups to return all needed values
+struct AccountGroupsResult {
+    account_keys: Vec<Pubkey>,
+    program_id_index: u8,
+    num_signers: u8,
+    num_writable_signers: u8,
+    num_writable_non_signers: u8,
+    /// Maps each input meta (in order) to its index in account_keys
+    account_indexes: Vec<u8>,
+}
+
 /// Helper to group accounts into signers, writable non-signers, and readonly non-signers,
-/// then map them to a sorted account_keys list. Returns (account_keys, program_id_index, account_indexes_map).
-fn build_account_groups(
-    account_metas: &[AccountMeta],
-    program_id: Pubkey,
-) -> (Vec<Pubkey>, u8, Vec<u8>) {
-    let mut signer_keys: Vec<Pubkey> = Vec::new();
+/// then map them to a sorted account_keys list. Returns the account_keys, program_id_index,
+/// and the counts needed for TransactionMessage (num_signers, num_writable_signers, num_writable_non_signers).
+fn build_account_groups(account_metas: &[AccountMeta], program_id: Pubkey) -> AccountGroupsResult {
+    let mut writable_signers: Vec<Pubkey> = Vec::new();
+    let mut readonly_signers: Vec<Pubkey> = Vec::new();
     let mut writable_non_signers: Vec<Pubkey> = Vec::new();
     let mut readonly_non_signers: Vec<Pubkey> = Vec::new();
 
-    // Group accounts by type
+    // Group accounts by type (4 categories)
     for meta in account_metas {
         if meta.is_signer {
-            if !signer_keys.contains(&meta.pubkey) {
-                signer_keys.push(meta.pubkey);
+            if meta.is_writable {
+                if !writable_signers.contains(&meta.pubkey) {
+                    writable_signers.push(meta.pubkey);
+                }
+            } else {
+                if !readonly_signers.contains(&meta.pubkey) {
+                    readonly_signers.push(meta.pubkey);
+                }
             }
         } else if meta.is_writable {
             if !writable_non_signers.contains(&meta.pubkey) {
@@ -72,15 +88,22 @@ fn build_account_groups(
         readonly_non_signers.push(program_id);
     }
 
-    // Build final account_keys list: [signers][writable non-signers][readonly non-signers]
+    // Capture counts BEFORE building the list
+    let num_writable_signers = writable_signers.len() as u8;
+    let num_readonly_signers = readonly_signers.len() as u8;
+    let num_signers = num_writable_signers + num_readonly_signers;
+    let num_writable_non_signers = writable_non_signers.len() as u8;
+
+    // Build final account_keys list: [writable signers][readonly signers][writable non-signers][readonly non-signers]
     let mut account_keys = Vec::new();
-    account_keys.extend(signer_keys.iter().copied());
+    account_keys.extend(writable_signers.iter().copied());
+    account_keys.extend(readonly_signers.iter().copied());
     account_keys.extend(writable_non_signers.iter().copied());
     account_keys.extend(readonly_non_signers.iter().copied());
 
     let program_id_index = account_keys.iter().position(|k| *k == program_id).unwrap() as u8;
 
-    // Map each meta to its index
+    // Map each input meta to its index in the reordered account_keys
     let account_indexes: Vec<u8> = account_metas
         .iter()
         .map(|meta| {
@@ -91,7 +114,14 @@ fn build_account_groups(
         })
         .collect();
 
-    (account_keys, program_id_index, account_indexes)
+    AccountGroupsResult {
+        account_keys,
+        program_id_index,
+        num_signers,
+        num_writable_signers,
+        num_writable_non_signers,
+        account_indexes,
+    }
 }
 
 pub fn send_and_confirm_transaction(
@@ -795,27 +825,20 @@ pub fn create_child_execute_transaction_message(
             .collect();
 
     let all_metas = accounts.to_account_metas(filtered_dynamic_accounts);
-    let (account_keys, program_id_index, account_indexes) =
-        build_account_groups(&all_metas, SQUADS_MULTISIG_PROGRAM_ID);
+    let groups = build_account_groups(&all_metas, SQUADS_MULTISIG_PROGRAM_ID);
 
     let compiled = crate::squads::CompiledInstruction {
-        program_id_index,
-        account_indexes: SmallVec::from(account_indexes),
+        program_id_index: groups.program_id_index,
+        account_indexes: SmallVec::from(groups.account_indexes),
         data: SmallVec::from(instruction_data),
     };
 
-    // Count signers and writable non-signers
-    let num_signers = all_metas.iter().filter(|m| m.is_signer).count() as u8;
-    let num_writable_non_signers = all_metas
-        .iter()
-        .filter(|m| !m.is_signer && m.is_writable)
-        .count() as u8;
-
+    // Use counts from build_account_groups which are based on the deduplicated list
     TransactionMessage {
-        num_signers,
-        num_writable_signers: 0, // execute expects member signer to be readonly
-        num_writable_non_signers,
-        account_keys: SmallVec::from(account_keys),
+        num_signers: groups.num_signers,
+        num_writable_signers: groups.num_writable_signers,
+        num_writable_non_signers: groups.num_writable_non_signers,
+        account_keys: SmallVec::from(groups.account_keys),
         instructions: SmallVec::from(vec![compiled]),
         address_table_lookups: SmallVec::from(vec![]),
     }
@@ -844,29 +867,22 @@ pub fn create_child_execute_config_transaction_message(
         AccountMeta::new_readonly(solana_system_interface::program::ID, false),
     ];
 
-    let (account_keys_list, program_id_index, account_indexes) =
-        build_account_groups(&account_metas, SQUADS_MULTISIG_PROGRAM_ID);
+    let groups = build_account_groups(&account_metas, SQUADS_MULTISIG_PROGRAM_ID);
 
     let instruction_data = CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR.to_vec();
 
     let compiled = crate::squads::CompiledInstruction {
-        program_id_index,
-        account_indexes: SmallVec::from(account_indexes),
+        program_id_index: groups.program_id_index,
+        account_indexes: SmallVec::from(groups.account_indexes),
         data: SmallVec::from(instruction_data),
     };
 
-    // Count signers and writable non-signers
-    let num_signers = account_metas.iter().filter(|m| m.is_signer).count() as u8;
-    let num_writable_non_signers = account_metas
-        .iter()
-        .filter(|m| !m.is_signer && m.is_writable)
-        .count() as u8;
-
+    // Use counts from build_account_groups which are based on the deduplicated list
     TransactionMessage {
-        num_signers,
-        num_writable_signers: 0,
-        num_writable_non_signers,
-        account_keys: SmallVec::from(account_keys_list),
+        num_signers: groups.num_signers,
+        num_writable_signers: groups.num_writable_signers,
+        num_writable_non_signers: groups.num_writable_non_signers,
+        account_keys: SmallVec::from(groups.account_keys),
         instructions: SmallVec::from(vec![compiled]),
         address_table_lookups: SmallVec::from(vec![]),
     }
@@ -1157,7 +1173,7 @@ pub fn create_child_create_paired_proposals_message(
 
     TransactionMessage {
         num_signers: 2,
-        num_writable_signers: 1, // rent payer writable; creator readonly
+        num_writable_signers: 1,     // rent payer writable; creator readonly
         num_writable_non_signers: 5, // multisig, vault_tx, vault_proposal, config_tx, config_proposal
         account_keys: SmallVec::from(account_keys),
         instructions: SmallVec::from(vec![
@@ -1168,6 +1184,265 @@ pub fn create_child_create_paired_proposals_message(
         ]),
         address_table_lookups: SmallVec::from(vec![]),
     }
+}
+
+/// Build a TransactionMessage for a parent multisig to APPROVE both a vault proposal and its paired
+/// config proposal in a single parent transaction.
+/// The parent vault PDA acts as the member approving both proposals.
+/// Caller must ensure the parent vault is a member of the child multisig with Vote permissions.
+pub fn create_child_approve_paired_proposals_message(
+    child_multisig: Pubkey,
+    vault_proposal_index: u64,
+    config_proposal_index: u64,
+    parent_member_pubkey: Pubkey,
+) -> TransactionMessage {
+    use crate::squads::{
+        get_proposal_pda, MultisigApproveProposalData, MultisigVoteOnProposalAccounts,
+        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+    };
+
+    // Get PDAs for both proposals
+    let (vault_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        vault_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (config_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        config_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+
+    // Instruction 1: Approve vault proposal
+    let vault_approve_accounts = MultisigVoteOnProposalAccounts {
+        multisig: child_multisig,
+        member: parent_member_pubkey,
+        proposal: vault_proposal_pda,
+    };
+    let vault_approve_data = MultisigApproveProposalData {
+        args: MultisigVoteOnProposalArgs { memo: None },
+    }
+    .data();
+
+    // Instruction 2: Approve config proposal
+    let config_approve_accounts = MultisigVoteOnProposalAccounts {
+        multisig: child_multisig,
+        member: parent_member_pubkey,
+        proposal: config_proposal_pda,
+    };
+    let config_approve_data = MultisigApproveProposalData {
+        args: MultisigVoteOnProposalArgs { memo: None },
+    }
+    .data();
+
+    // Build unified account_keys list
+    // Must follow Solana order: writable signers, readonly signers, writable non-signers, readonly non-signers
+    let account_keys = vec![
+        parent_member_pubkey,       // writable signer
+        vault_proposal_pda,         // writable non-signer
+        config_proposal_pda,        // writable non-signer
+        child_multisig,             // readonly non-signer
+        SQUADS_MULTISIG_PROGRAM_ID, // program id (readonly non-signer)
+    ];
+
+    let program_id_index = 4u8;
+
+    // Helper to map metas to indexes in account_keys
+    let meta_indexes = |metas: &[solana_instruction::AccountMeta]| -> SmallVec<u8, u8> {
+        let idxs: Vec<u8> = metas
+            .iter()
+            .map(|m| {
+                account_keys
+                    .iter()
+                    .position(|k| *k == m.pubkey)
+                    .expect("meta pubkey present in account_keys") as u8
+            })
+            .collect();
+        SmallVec::from(idxs)
+    };
+
+    let vault_approve_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&vault_approve_accounts.to_account_metas()),
+        data: SmallVec::from(vault_approve_data),
+    };
+
+    let config_approve_ix = crate::squads::CompiledInstruction {
+        program_id_index,
+        account_indexes: meta_indexes(&config_approve_accounts.to_account_metas()),
+        data: SmallVec::from(config_approve_data),
+    };
+
+    TransactionMessage {
+        num_signers: 1,
+        num_writable_signers: 1, // parent_member_pubkey is writable signer
+        num_writable_non_signers: 2, // vault_proposal, config_proposal (multisig is readonly)
+        account_keys: SmallVec::from(account_keys),
+        instructions: SmallVec::from(vec![vault_approve_ix, config_approve_ix]),
+        address_table_lookups: SmallVec::from(vec![]),
+    }
+}
+
+/// Build a TransactionMessage for a parent multisig to EXECUTE both a vault proposal and its paired
+/// config proposal in a single parent transaction.
+/// The vault execution requires account metas from the stored vault transaction.
+/// The config execution is simpler and doesn't require extra accounts.
+/// This function merges all accounts and returns a TransactionMessage with both execute instructions.
+pub fn create_child_execute_paired_proposals_message(
+    child_multisig: Pubkey,
+    vault_proposal_index: u64,
+    vault_transaction: crate::squads::VaultTransaction,
+    config_proposal_index: u64,
+    parent_member_pubkey: Pubkey,
+) -> eyre::Result<TransactionMessage> {
+    use crate::squads::{
+        get_proposal_pda, get_transaction_pda, MultisigExecuteTransactionAccounts,
+        MultisigExecuteTransactionArgs, SmallVec, CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR,
+        EXECUTE_TRANSACTION_DISCRIMINATOR, SQUADS_MULTISIG_PROGRAM_ID,
+    };
+
+    // Get PDAs for both proposals and transactions
+    let (vault_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        vault_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (vault_transaction_pda, _) = get_transaction_pda(
+        &child_multisig,
+        vault_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (config_proposal_pda, _) = get_proposal_pda(
+        &child_multisig,
+        config_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+    let (config_transaction_pda, _) = get_transaction_pda(
+        &child_multisig,
+        config_proposal_index,
+        Some(&SQUADS_MULTISIG_PROGRAM_ID),
+    );
+
+    // === Build Vault Execute Instruction ===
+    let vault_execute_accounts = MultisigExecuteTransactionAccounts {
+        multisig: child_multisig,
+        proposal: vault_proposal_pda,
+        transaction: vault_transaction_pda,
+        member: parent_member_pubkey,
+    };
+
+    let vault_execute_args = MultisigExecuteTransactionArgs { memo: None };
+    let mut vault_execute_data = Vec::new();
+    vault_execute_data.extend_from_slice(EXECUTE_TRANSACTION_DISCRIMINATOR);
+    vault_execute_data.extend_from_slice(&borsh::to_vec(&vault_execute_args).unwrap());
+
+    // Extract execution accounts from vault transaction
+    // IMPORTANT: Do NOT mark any accounts as signers. The Squads program will derive
+    // the required signer PDA(s) from the stored transaction message. Marking them as
+    // signers in the outer Execute instruction confuses the account grouping.
+    let vault_execution_account_metas: Vec<solana_instruction::AccountMeta> = vault_transaction
+        .message
+        .account_keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| {
+            let is_signer = false; // Never mark as signer
+            let is_writable = vault_transaction.message.is_static_writable_index(idx);
+            solana_instruction::AccountMeta {
+                pubkey: *key,
+                is_signer,
+                is_writable,
+            }
+        })
+        .collect();
+
+    // CRITICAL: The Squads program validates that execution accounts match the stored vault transaction.
+    // We must preserve the EXACT account list from vault_execute_accounts.to_account_metas()
+    // without any reordering or deduplication that would break the stored transaction expectations.
+    let vault_all_metas = vault_execute_accounts.to_account_metas(vault_execution_account_metas);
+
+    // === Build Config Execute Instruction ===
+    let config_execute_metas = vec![
+        AccountMeta::new(child_multisig, false),
+        AccountMeta::new_readonly(parent_member_pubkey, true),
+        AccountMeta::new(config_proposal_pda, false),
+        AccountMeta::new_readonly(config_transaction_pda, false),
+        AccountMeta::new_readonly(SQUADS_MULTISIG_PROGRAM_ID, false), // rent_payer placeholder
+        AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+    ];
+
+    let config_execute_data = CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR.to_vec();
+
+    // === Build unified account_keys list ===
+    // Strategy:
+    // 1. Merge vault and config metas into a unified list, upgrading permissions as needed
+    // 2. Use build_account_groups to reorder into Solana-compliant order (signers first)
+    // 3. Map each instruction's account metas to indexes in the reordered list
+
+    // Step 1: Start with vault execution metas
+    let mut unified_metas: Vec<solana_instruction::AccountMeta> = vault_all_metas.clone();
+
+    // Step 2: Merge config execution metas, upgrading permissions for duplicates
+    for config_meta in &config_execute_metas {
+        if let Some(existing) = unified_metas.iter_mut().find(|m| m.pubkey == config_meta.pubkey) {
+            // Upgrade permissions if needed
+            existing.is_writable = existing.is_writable || config_meta.is_writable;
+            existing.is_signer = existing.is_signer || config_meta.is_signer;
+        } else {
+            // New account - add it
+            unified_metas.push(config_meta.clone());
+        }
+    }
+
+    // Step 3: Reorder accounts using build_account_groups
+    // This returns the deduplicated, properly ordered account_keys along with the counts
+    let groups = build_account_groups(&unified_metas, SQUADS_MULTISIG_PROGRAM_ID);
+
+    // Step 4: Build vault instruction - map each vault meta to its index in account_keys
+    let vault_account_indexes: Vec<u8> = vault_all_metas
+        .iter()
+        .map(|m| {
+            groups
+                .account_keys
+                .iter()
+                .position(|k| *k == m.pubkey)
+                .expect("vault meta pubkey must be in account_keys") as u8
+        })
+        .collect();
+
+    let vault_execute_ix = crate::squads::CompiledInstruction {
+        program_id_index: groups.program_id_index,
+        account_indexes: SmallVec::from(vault_account_indexes),
+        data: SmallVec::from(vault_execute_data),
+    };
+
+    // Step 5: Build config instruction - map each config meta to its index in account_keys
+    let config_account_indexes: Vec<u8> = config_execute_metas
+        .iter()
+        .map(|m| {
+            groups
+                .account_keys
+                .iter()
+                .position(|k| *k == m.pubkey)
+                .expect("config meta pubkey must be in account_keys") as u8
+        })
+        .collect();
+
+    let config_execute_ix = crate::squads::CompiledInstruction {
+        program_id_index: groups.program_id_index,
+        account_indexes: SmallVec::from(config_account_indexes),
+        data: SmallVec::from(config_execute_data),
+    };
+
+    // Use the counts from build_account_groups which are based on the deduplicated list
+    Ok(TransactionMessage {
+        num_signers: groups.num_signers,
+        num_writable_signers: groups.num_writable_signers,
+        num_writable_non_signers: groups.num_writable_non_signers,
+        account_keys: SmallVec::from(groups.account_keys),
+        instructions: SmallVec::from(vec![vault_execute_ix, config_execute_ix]),
+        address_table_lookups: SmallVec::from(vec![]),
+    })
 }
 
 /// Build a TransactionMessage for a parent multisig to CREATE a child's vault transaction
