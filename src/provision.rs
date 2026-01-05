@@ -1610,6 +1610,80 @@ pub fn create_execute_config_transaction_message(
     Ok(message)
 }
 
+/// Create a combined vote message for EOA paired proposals (vault + config in one transaction).
+/// This allows atomic approval or rejection of both the vault and config proposals in a single Solana tx.
+/// The `discriminator` should be either `PROPOSAL_APPROVE_DISCRIMINATOR` or `PROPOSAL_REJECT_DISCRIMINATOR`.
+pub fn create_vote_paired_proposals_message_eoa(
+    program_id: &Pubkey,
+    multisig_address: &Pubkey,
+    member_pubkey: &Pubkey,
+    fee_payer_pubkey: &Pubkey,
+    vault_index: u64,
+    config_index: u64,
+    recent_blockhash: Hash,
+    discriminator: &[u8],
+) -> eyre::Result<Message> {
+    use crate::squads::{get_proposal_pda, MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs};
+
+    // Get PDAs for both proposals
+    let (vault_proposal_pda, _) =
+        get_proposal_pda(multisig_address, vault_index, Some(program_id));
+    let (config_proposal_pda, _) =
+        get_proposal_pda(multisig_address, config_index, Some(program_id));
+
+    // Build vault vote instruction
+    let vault_vote_accounts = MultisigVoteOnProposalAccounts {
+        multisig: *multisig_address,
+        member: *member_pubkey,
+        proposal: vault_proposal_pda,
+    };
+
+    let vault_vote_args = MultisigVoteOnProposalArgs { memo: None };
+    let mut vault_vote_data = Vec::new();
+    vault_vote_data.extend_from_slice(discriminator);
+    vault_vote_data.extend_from_slice(
+        &borsh::to_vec(&vault_vote_args)
+            .map_err(|e| eyre::eyre!("Failed to serialize vault vote args: {}", e))?,
+    );
+
+    let vault_vote_ix = Instruction {
+        program_id: *program_id,
+        accounts: vault_vote_accounts.to_account_metas(),
+        data: vault_vote_data,
+    };
+
+    // Build config vote instruction
+    let config_vote_accounts = MultisigVoteOnProposalAccounts {
+        multisig: *multisig_address,
+        member: *member_pubkey,
+        proposal: config_proposal_pda,
+    };
+
+    let config_vote_args = MultisigVoteOnProposalArgs { memo: None };
+    let mut config_vote_data = Vec::new();
+    config_vote_data.extend_from_slice(discriminator);
+    config_vote_data.extend_from_slice(
+        &borsh::to_vec(&config_vote_args)
+            .map_err(|e| eyre::eyre!("Failed to serialize config vote args: {}", e))?,
+    );
+
+    let config_vote_ix = Instruction {
+        program_id: *program_id,
+        accounts: config_vote_accounts.to_account_metas(),
+        data: config_vote_data,
+    };
+
+    // Compile both instructions into a single message
+    let message = Message::try_compile(
+        fee_payer_pubkey,
+        &[vault_vote_ix, config_vote_ix],
+        &[],
+        recent_blockhash,
+    )?;
+
+    Ok(message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1787,13 +1861,11 @@ mod tests {
         let transaction_index = 1u64;
 
         // Test transaction PDA derivation
-        let (transaction_pda, transaction_bump) =
+        let (transaction_pda, _) =
             get_transaction_pda(&multisig_address, transaction_index, None);
 
         // Test proposal PDA derivation
-        let (proposal_pda, proposal_bump) =
-            get_proposal_pda(&multisig_address, transaction_index, None);
-        assert!(proposal_bump <= 255); // Valid bump seed
+        let (proposal_pda, _) = get_proposal_pda(&multisig_address, transaction_index, None);
 
         // PDAs should be different
         assert_ne!(transaction_pda, proposal_pda);
@@ -2055,19 +2127,18 @@ mod tests {
     fn test_feature_activation_instructions_compilation() {
         let transaction_message = create_test_transaction_message();
 
-        // Verify we have 3 compiled instructions (transfer, allocate, assign)
-        assert_eq!(transaction_message.instructions.len(), 3);
+        // Verify we have 2 compiled instructions (allocate, assign) for funded feature activation
+        assert_eq!(transaction_message.instructions.len(), 2);
 
-        // Verify account structure
-        assert!(transaction_message.account_keys.len() >= 4); // At least: funding, feature, system, feature_gate_program
+        // Verify account structure (3 accounts: feature, system program, feature gate program)
+        assert!(transaction_message.account_keys.len() >= 3);
 
-        // Verify signer counts
+        // Verify signer counts (feature account is the only signer and is writable)
         assert_eq!(transaction_message.num_signers, 1);
         assert_eq!(transaction_message.num_writable_signers, 1);
-        assert_eq!(transaction_message.num_writable_non_signers, 1);
+        assert_eq!(transaction_message.num_writable_non_signers, 0);
 
-        // First account should be the funding address (signer)
-        // Second account should be the feature account (writable non-signer)
+        // First account is the feature account (writable signer)
         // System program and Feature Gate program should be in the account list
         let has_system_program = transaction_message
             .account_keys

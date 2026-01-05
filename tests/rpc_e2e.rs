@@ -24,8 +24,8 @@ use feature_gate_multisig_tool::feature_gate_program::{
 };
 use feature_gate_multisig_tool::provision::create_multisig;
 use feature_gate_multisig_tool::squads::{
-    get_proposal_pda, get_transaction_pda, get_vault_pda, Member, Permission, Permissions,
-    Proposal, ProposalStatus, SQUADS_MULTISIG_PROGRAM_ID,
+    get_proposal_pda, get_vault_pda, Member, Permission, Permissions, Proposal, ProposalStatus,
+    SQUADS_MULTISIG_PROGRAM_ID,
 };
 use feature_gate_multisig_tool::utils::Config;
 
@@ -48,7 +48,6 @@ struct Fixture {
     // Note: arrays below include EOA at index 1 for unified loops
     child_multisig: Pubkey,
     child_vault: Pubkey,
-    fee_payer_path: String,
     executor_path: String,
     config: Config,
 }
@@ -178,7 +177,6 @@ async fn build_fixture() -> Fixture {
         eoa_key_path: eoa_keypair_path.to_string_lossy().to_string(),
         child_multisig: child_multisig_pda,
         child_vault: child_vault_pda,
-        fee_payer_path: fee_payer_path.to_string_lossy().to_string(),
         executor_path,
         config,
     }
@@ -263,27 +261,6 @@ async fn rpc_e2e_1_activate_feature_gate() {
 
     println!("✅ Feature gate activation E2E test completed successfully!");
 
-    // Debug: Check the status of Index 2
-    println!("\n🐛 Debug: Checking Index 2 status after test 1");
-    let (proposal_2_pda, _) = get_proposal_pda(&fixture.child_multisig, 2, None);
-    if let Ok(proposal_2_account) = client.get_account(&proposal_2_pda) {
-        let proposal_2: Proposal =
-            BorshDeserialize::deserialize(&mut &proposal_2_account.data[8..])
-                .expect("deserialize proposal 2");
-        match proposal_2.status {
-            ProposalStatus::Draft { .. } => println!("Index 2 status: Draft"),
-            ProposalStatus::Active { .. } => println!("Index 2 status: Active"),
-            ProposalStatus::Approved { .. } => println!("Index 2 status: Approved"),
-            ProposalStatus::Rejected { .. } => println!("Index 2 status: Rejected"),
-            ProposalStatus::Cancelled { .. } => println!("Index 2 status: Cancelled"),
-            ProposalStatus::Executed { .. } => println!("Index 2 status: Executed"),
-            ProposalStatus::Executing => println!("Index 2 status: Executing"),
-        }
-        println!("Index 2 approvals: {}", proposal_2.approved.len());
-    } else {
-        println!("Index 2 proposal does not exist!");
-    }
-
     // Debug: Check threshold
     let child_ms_account_final = client
         .get_account(&fixture.child_multisig)
@@ -291,7 +268,10 @@ async fn rpc_e2e_1_activate_feature_gate() {
     let child_ms_final: feature_gate_multisig_tool::squads::Multisig =
         BorshDeserialize::deserialize(&mut &child_ms_account_final.data[8..])
             .expect("deserialize child multisig");
-    println!("Final threshold after test 1: {}", child_ms_final.threshold);
+    assert_eq!(
+        child_ms_final.threshold, 1,
+        "threshold should be 1 after activation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -473,20 +453,6 @@ async fn rpc_e2e_2_revoke_feature_gate() {
         child_ms_data.threshold, 3,
         "threshold should be restored to 3 after revocation execution"
     );
-    println!("✅ Threshold restored to 3");
-
-    println!("\n✅ Feature gate revocation E2E test completed successfully!");
-    println!("   Demonstrated:");
-    println!("     - Activation requires {} approvals (Index 1)", 3);
-    println!("     - Lower threshold requires {} approvals (Index 2)", 3);
-    println!("     - Revocation proposal created dynamically after threshold lowered");
-    println!(
-        "     - Revocation approved and executed with only 1 approval (Index {})!",
-        revocation_index
-    );
-    println!("     - Threshold restored to 3 after revocation execution");
-    println!();
-    println!("   This proves emergency feature revocation works with 1 approval!");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -906,4 +872,350 @@ async fn rpc_e2e_6_rekey_feature_gate_multisig() {
     );
 
     println!("✅ Feature gate rekey E2E test completed successfully!");
+}
+
+/// Test 7: EOA approves and executes an activation proposal
+/// This test creates a new child multisig with EOA-only members using the real CLI flow,
+/// then EOAs approve and execute the pre-created activation proposal.
+#[tokio::test(flavor = "multi_thread")]
+async fn rpc_e2e_7_eoa_activation_flow() {
+    // Enable non-interactive mode
+    std::env::set_var("E2E_TEST_MODE", "1");
+
+    let client = RpcClient::new_with_commitment(rpc_url(), CommitmentConfig::confirmed());
+    let temp_dir: PathBuf = std::env::temp_dir();
+
+    // Create 3 EOA members for a new child multisig
+    let mut eoa_keypaths = Vec::new();
+    let mut eoa_pubkeys = Vec::new();
+
+    for i in 0..3 {
+        let eoa = Keypair::new();
+        let sig = client
+            .request_airdrop(&eoa.pubkey(), 10_000_000_000)
+            .expect("request airdrop for eoa");
+        client
+            .confirm_transaction(&sig)
+            .expect("confirm airdrop for eoa");
+
+        let keypair_path = temp_dir.join(format!("eoa_test7_{}.json", i));
+        let keypair_bytes: Vec<u8> = eoa.to_bytes().to_vec();
+        std::fs::write(
+            &keypair_path,
+            serde_json::to_string(&keypair_bytes).unwrap(),
+        )
+        .expect("write eoa keypair");
+
+        eoa_pubkeys.push(eoa.pubkey());
+        eoa_keypaths.push(keypair_path.to_string_lossy().to_string());
+    }
+
+    // Use create_command_with_deployments like the real CLI - this creates multisig + initial activation proposal
+    let mut config = Config {
+        networks: vec![rpc_url()],
+        threshold: 2,
+        members: eoa_pubkeys.iter().map(|p| p.to_string()).collect(),
+        fee_payer_path: Some(eoa_keypaths[0].clone()),
+    };
+
+    let deployments = create_command_with_deployments(
+        &mut config,
+        Some(2), // threshold
+        vec![],
+        Some(eoa_keypaths[0].clone()),
+    )
+    .await
+    .expect("create feature gate via CLI");
+
+    let deployment = deployments.get(0).expect("deployment should exist");
+    let child_multisig = deployment.multisig_address;
+    let child_vault = deployment.vault_address;
+
+    println!("✅ Created EOA-only child multisig via CLI: {}", child_multisig);
+    println!("   Vault (feature gate ID): {}", child_vault);
+    println!("   Activation proposal pre-created at index 1");
+
+    // Note: The setup keypair only has Initiate permission (not Vote), so no approvals yet.
+    // We need 2 EOA approvals to meet threshold 2.
+
+    // EOA[0] approves the activation proposal
+    approve_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[0],
+        eoa_keypaths[0].clone(),
+        None,
+        1, // proposal index
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[0] approves activation");
+
+    println!("✅ EOA[0] approved activation proposal (1/2)");
+
+    // EOA[1] approves the activation proposal
+    approve_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[1],
+        eoa_keypaths[1].clone(),
+        None,
+        1, // proposal index
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[1] approves activation");
+
+    println!("✅ EOA[1] approved activation proposal (2/2)");
+
+    // Verify proposal is approved (2 approvals, threshold 2)
+    let (proposal_pda, _) = get_proposal_pda(&child_multisig, 1, None);
+    let proposal_account = client
+        .get_account(&proposal_pda)
+        .expect("proposal account should exist");
+    let proposal: Proposal = BorshDeserialize::deserialize(&mut &proposal_account.data[8..])
+        .expect("deserialize proposal");
+
+    match proposal.status {
+        ProposalStatus::Approved { .. } => {
+            println!("✅ Proposal status: Approved");
+        }
+        _ => panic!("Expected proposal to be Approved"),
+    }
+
+    // EOA[1] executes the proposal
+    execute_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[1],
+        eoa_keypaths[1].clone(),
+        None,
+        1,
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[1] executes activation");
+
+    println!("✅ EOA[1] executed activation proposal");
+
+    // Verify feature gate is activated
+    let feature_account = client
+        .get_account(&child_vault)
+        .expect("feature gate account should exist");
+    assert_eq!(
+        feature_account.owner, FEATURE_GATE_PROGRAM_ID,
+        "feature gate should be owned by Feature Gate program"
+    );
+    assert_eq!(
+        feature_account.data.len(),
+        FEATURE_ACCOUNT_SIZE,
+        "feature gate account should have correct size"
+    );
+
+    // Verify threshold was lowered to 1
+    let child_ms_account = client
+        .get_account(&child_multisig)
+        .expect("fetch child multisig");
+    let child_ms: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
+            .expect("deserialize child multisig");
+    assert_eq!(
+        child_ms.threshold, 1,
+        "threshold should be lowered to 1 after activation"
+    );
+
+    println!("✅ EOA activation flow E2E test completed successfully!");
+    println!("   Demonstrated: EOAs approve and execute activation (created via CLI)");
+}
+
+/// Test 8: EOA creates and executes a revocation proposal
+/// Uses the same CLI flow as test 7 - creates multisig via create_command_with_deployments,
+/// then activates, then creates and executes revocation.
+#[tokio::test(flavor = "multi_thread")]
+async fn rpc_e2e_8_eoa_revocation_flow() {
+    // Enable non-interactive mode
+    std::env::set_var("E2E_TEST_MODE", "1");
+
+    let client = RpcClient::new_with_commitment(rpc_url(), CommitmentConfig::confirmed());
+    let temp_dir: PathBuf = std::env::temp_dir();
+
+    // Create 3 EOA members
+    let mut eoa_keypaths = Vec::new();
+    let mut eoa_pubkeys = Vec::new();
+
+    for i in 0..3 {
+        let eoa = Keypair::new();
+        let sig = client
+            .request_airdrop(&eoa.pubkey(), 10_000_000_000)
+            .expect("request airdrop for eoa");
+        client
+            .confirm_transaction(&sig)
+            .expect("confirm airdrop for eoa");
+
+        let keypair_path = temp_dir.join(format!("eoa_test8_{}.json", i));
+        let keypair_bytes: Vec<u8> = eoa.to_bytes().to_vec();
+        std::fs::write(
+            &keypair_path,
+            serde_json::to_string(&keypair_bytes).unwrap(),
+        )
+        .expect("write eoa keypair");
+
+        eoa_pubkeys.push(eoa.pubkey());
+        eoa_keypaths.push(keypair_path.to_string_lossy().to_string());
+    }
+
+    // Use create_command_with_deployments like the real CLI - this creates multisig + initial activation proposal
+    let mut config = Config {
+        networks: vec![rpc_url()],
+        threshold: 2,
+        members: eoa_pubkeys.iter().map(|p| p.to_string()).collect(),
+        fee_payer_path: Some(eoa_keypaths[0].clone()),
+    };
+
+    let deployments = create_command_with_deployments(
+        &mut config,
+        Some(2), // threshold
+        vec![],
+        Some(eoa_keypaths[0].clone()),
+    )
+    .await
+    .expect("create feature gate via CLI");
+
+    let deployment = deployments.get(0).expect("deployment should exist");
+    let child_multisig = deployment.multisig_address;
+    let child_vault = deployment.vault_address;
+
+    println!("✅ Created EOA-only child multisig via CLI: {}", child_multisig);
+    println!("   Vault (feature gate ID): {}", child_vault);
+
+    // First, activate the feature gate (prerequisite for revocation)
+    // Note: The setup keypair only has Initiate permission (not Vote), so no approvals yet.
+    // We need 2 EOA approvals to meet threshold 2.
+
+    // EOA[0] approves the activation proposal
+    approve_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[0],
+        eoa_keypaths[0].clone(),
+        None,
+        1,
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[0] approves activation");
+
+    // EOA[1] approves the activation proposal
+    approve_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[1],
+        eoa_keypaths[1].clone(),
+        None,
+        1,
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[1] approves activation");
+
+    // EOA[1] executes the activation
+    execute_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[1],
+        eoa_keypaths[1].clone(),
+        None,
+        1,
+        TransactionKind::Activate,
+    )
+    .await
+    .expect("EOA[1] executes activation");
+
+    println!("✅ Feature gate activated (prerequisite for revocation)");
+
+    // Verify threshold is now 1
+    let child_ms_account = client
+        .get_account(&child_multisig)
+        .expect("fetch child multisig");
+    let child_ms: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_account.data[8..])
+            .expect("deserialize child multisig");
+    assert_eq!(child_ms.threshold, 1, "threshold should be 1 after activation");
+
+    let revocation_index = child_ms.transaction_index + 1;
+
+    // EOA[2] creates revocation proposal (different from activation creator)
+    create_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[2],
+        eoa_keypaths[2].clone(),
+        None,
+        TransactionKind::Revoke,
+    )
+    .await
+    .expect("EOA[2] creates revocation proposal");
+
+    println!("✅ EOA[2] created revocation proposal at index {}", revocation_index);
+
+    // With threshold 1, a single approval should make the proposal approved
+    // Note: Creating a proposal does NOT auto-approve it - we need to explicitly approve
+    approve_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[2],
+        eoa_keypaths[2].clone(),
+        None,
+        revocation_index,
+        TransactionKind::Revoke,
+    )
+    .await
+    .expect("EOA[2] approves revocation");
+
+    println!("✅ EOA[2] approved revocation proposal (threshold is 1, so now approved)");
+
+    // Verify the proposal is now approved
+    let (proposal_pda, _) = get_proposal_pda(&child_multisig, revocation_index, None);
+    let proposal_account = client
+        .get_account(&proposal_pda)
+        .expect("proposal account should exist");
+    let proposal: Proposal = BorshDeserialize::deserialize(&mut &proposal_account.data[8..])
+        .expect("deserialize proposal");
+
+    match proposal.status {
+        ProposalStatus::Approved { .. } => {
+            println!("✅ Revocation proposal is Approved (1/1 approvals met threshold)");
+        }
+        _ => panic!("Expected proposal to be Approved after 1 approval with threshold 1"),
+    }
+
+    // EOA[2] executes the revocation
+    execute_common_feature_gate_proposal(
+        &config,
+        child_multisig,
+        eoa_pubkeys[2],
+        eoa_keypaths[2].clone(),
+        None,
+        revocation_index,
+        TransactionKind::Revoke,
+    )
+    .await
+    .expect("EOA[2] executes revocation");
+
+    println!("✅ EOA[2] executed revocation proposal");
+
+    // Verify threshold was restored to 2
+    let child_ms_final = client
+        .get_account(&child_multisig)
+        .expect("fetch child multisig");
+    let child_ms_data: feature_gate_multisig_tool::squads::Multisig =
+        BorshDeserialize::deserialize(&mut &child_ms_final.data[8..])
+            .expect("deserialize child multisig");
+    assert_eq!(
+        child_ms_data.threshold, 2,
+        "threshold should be restored to 2 after revocation"
+    );
+
+    println!("✅ EOA revocation flow E2E test completed successfully!");
+    println!("   Demonstrated: EOA creates, and executes revocation with threshold=1");
 }
