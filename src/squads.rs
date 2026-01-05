@@ -55,6 +55,11 @@ pub enum Permission {
     Execute = 1 << 2,
 }
 
+/// Permission bit constants for checking member permissions
+pub const PERMISSION_INITIATE: u8 = 1 << 0;
+pub const PERMISSION_VOTE: u8 = 1 << 1;
+pub const PERMISSION_EXECUTE: u8 = 1 << 2;
+
 #[derive(BorshSerialize, BorshDeserialize, Eq, PartialEq, Clone, Copy, Default, Debug)]
 pub struct Permissions {
     pub mask: u8,
@@ -236,7 +241,7 @@ pub struct MultisigCreateTransaction {
 }
 
 impl MultisigCreateTransaction {
-    pub fn to_account_metas(&self, _is_signer: Option<bool>) -> Vec<AccountMeta> {
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new(self.multisig, false),
             AccountMeta::new(self.transaction, false),
@@ -269,7 +274,7 @@ impl VaultTransactionCreateArgsData {
 }
 
 impl MultisigCreateV2Accounts {
-    pub fn to_account_metas(&self, _is_signer: Option<bool>) -> Vec<AccountMeta> {
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new_readonly(self.program_config, false),
             AccountMeta::new(self.treasury, false),
@@ -303,7 +308,7 @@ pub struct MultisigCreateProposalAccounts {
 }
 
 impl MultisigCreateProposalAccounts {
-    pub fn to_account_metas(&self, _is_signer: Option<bool>) -> Vec<AccountMeta> {
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new(self.multisig, false),
             AccountMeta::new(self.proposal, false),

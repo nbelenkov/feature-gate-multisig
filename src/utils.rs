@@ -516,7 +516,7 @@ pub async fn create_and_send_paired_proposals(
     let vault_create_transaction_instruction = Instruction::new_with_bytes(
         *program_id,
         &vault_create_transaction_data.data(),
-        vault_create_transaction_accounts.to_account_metas(None),
+        vault_create_transaction_accounts.to_account_metas(),
     );
     instructions.push(vault_create_transaction_instruction);
 
@@ -539,7 +539,7 @@ pub async fn create_and_send_paired_proposals(
     let vault_create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
         &vault_create_proposal_data.data(),
-        vault_create_proposal_accounts.to_account_metas(None),
+        vault_create_proposal_accounts.to_account_metas(),
     );
     instructions.push(vault_create_proposal_instruction);
 
@@ -588,7 +588,7 @@ pub async fn create_and_send_paired_proposals(
     let config_create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
         &config_create_proposal_data.data(),
-        config_create_proposal_accounts.to_account_metas(None),
+        config_create_proposal_accounts.to_account_metas(),
     );
     instructions.push(config_create_proposal_instruction);
 

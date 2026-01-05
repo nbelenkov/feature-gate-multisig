@@ -210,7 +210,7 @@ fn test_account_metas_generation() {
         system_program: solana_system_interface::program::ID,
     };
 
-    let tx_metas = create_transaction_accounts.to_account_metas(None);
+    let tx_metas = create_transaction_accounts.to_account_metas();
     assert_eq!(tx_metas.len(), 5);
     assert_eq!(tx_metas[0].pubkey, multisig);
     assert_eq!(tx_metas[1].pubkey, transaction);
@@ -227,7 +227,7 @@ fn test_account_metas_generation() {
         system_program: solana_system_interface::program::ID,
     };
 
-    let proposal_metas = create_proposal_accounts.to_account_metas(None);
+    let proposal_metas = create_proposal_accounts.to_account_metas();
     assert_eq!(proposal_metas.len(), 5);
     assert_eq!(proposal_metas[0].pubkey, multisig);
     assert_eq!(proposal_metas[1].pubkey, proposal);

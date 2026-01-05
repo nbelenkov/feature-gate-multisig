@@ -53,7 +53,7 @@ struct AccountGroupsResult {
 /// Helper to group accounts into signers, writable non-signers, and readonly non-signers,
 /// then map them to a sorted account_keys list. Returns the account_keys, program_id_index,
 /// and the counts needed for TransactionMessage (num_signers, num_writable_signers, num_writable_non_signers).
-fn build_account_groups(account_metas: &[AccountMeta], program_id: Pubkey) -> AccountGroupsResult {
+fn build_account_groups(account_metas: &[AccountMeta], program_id: Pubkey) -> eyre::Result<AccountGroupsResult> {
     let mut writable_signers: Vec<Pubkey> = Vec::new();
     let mut readonly_signers: Vec<Pubkey> = Vec::new();
     let mut writable_non_signers: Vec<Pubkey> = Vec::new();
@@ -100,27 +100,29 @@ fn build_account_groups(account_metas: &[AccountMeta], program_id: Pubkey) -> Ac
     account_keys.extend(writable_non_signers.iter().copied());
     account_keys.extend(readonly_non_signers.iter().copied());
 
-    let program_id_index = account_keys.iter().position(|k| *k == program_id).unwrap() as u8;
+    let program_id_index = account_keys
+        .iter()
+        .position(|k| *k == program_id)
+        .ok_or_else(|| eyre::eyre!("program_id not found in account_keys"))? as u8;
 
     // Map each input meta to its index in the reordered account_keys
-    let account_indexes: Vec<u8> = account_metas
-        .iter()
-        .map(|meta| {
-            account_keys
-                .iter()
-                .position(|k| *k == meta.pubkey)
-                .expect("meta key present in account_keys") as u8
-        })
-        .collect();
+    let mut account_indexes: Vec<u8> = Vec::with_capacity(account_metas.len());
+    for meta in account_metas {
+        let idx = account_keys
+            .iter()
+            .position(|k| *k == meta.pubkey)
+            .ok_or_else(|| eyre::eyre!("meta key {} not found in account_keys", meta.pubkey))?;
+        account_indexes.push(idx as u8);
+    }
 
-    AccountGroupsResult {
+    Ok(AccountGroupsResult {
         account_keys,
         program_id_index,
         num_signers,
         num_writable_signers,
         num_writable_non_signers,
         account_indexes,
-    }
+    })
 }
 
 pub fn send_and_confirm_transaction(
@@ -360,7 +362,8 @@ pub async fn create_multisig(
     priority_fee_lamports: Option<u64>,
 ) -> eyre::Result<(Pubkey, String)> {
     let program_id = program_id.unwrap_or_else(|| SQUADS_PROGRAM_ID_STR.to_string());
-    let program_id = Pubkey::from_str(&program_id).expect("Invalid program ID");
+    let program_id = Pubkey::from_str(&program_id)
+        .map_err(|e| eyre::eyre!("Invalid program ID '{}': {}", program_id, e))?;
     let multisig_address = crate::squads::get_multisig_pda(&create_key.pubkey(), None).0;
     let vault_address = get_vault_pda(&multisig_address, 0, None).0;
 
@@ -454,7 +457,7 @@ pub async fn create_multisig(
 
     let blockhash = rpc_client
         .get_latest_blockhash()
-        .expect("Failed to get blockhash");
+        .map_err(|e| eyre::eyre!("Failed to get blockhash: {}", e))?;
 
     let multisig_key = get_multisig_pda(&create_key.pubkey(), Some(&program_id));
 
@@ -462,15 +465,21 @@ pub async fn create_multisig(
 
     let program_config = rpc_client
         .get_account(&program_config_pda.0)
-        .expect("Failed to fetch program config account");
+        .map_err(|e| eyre::eyre!("Failed to fetch program config account: {}", e))?;
 
     let program_config_data = program_config.data.as_slice();
 
     // Skip the first 8 bytes (discriminator) before deserializing
+    if program_config_data.len() < 8 {
+        return Err(eyre::eyre!(
+            "Program config account data too small: {} bytes (expected at least 8)",
+            program_config_data.len()
+        ));
+    }
     let config_data_without_discriminator = &program_config_data[8..];
 
     let treasury = borsh::from_slice::<ProgramConfig>(config_data_without_discriminator)
-        .unwrap()
+        .map_err(|e| eyre::eyre!("Failed to deserialize program config: {}", e))?
         .treasury;
 
     let message = Message::try_compile(
@@ -489,7 +498,7 @@ pub async fn create_multisig(
                     program_config: program_config_pda.0,
                     treasury,
                 }
-                .to_account_metas(Some(false)),
+                .to_account_metas(),
                 data: MultisigCreateV2Data {
                     args: MultisigCreateArgsV2 {
                         config_authority: None,
@@ -507,13 +516,13 @@ pub async fn create_multisig(
         &[],
         blockhash,
     )
-    .unwrap();
+    .map_err(|e| eyre::eyre!("Failed to compile message: {}", e))?;
 
     let transaction = VersionedTransaction::try_new(
         VersionedMessage::V0(message),
         &[fee_payer_keypair, create_key as &dyn Signer],
     )
-    .expect("Failed to create transaction");
+    .map_err(|e| eyre::eyre!("Failed to create transaction: {}", e))?;
 
     let signature = send_and_confirm_transaction(&transaction, &rpc_client)?;
 
@@ -580,7 +589,7 @@ pub fn create_transaction_and_proposal_message(
     let create_transaction_instruction = Instruction::new_with_bytes(
         *program_id,
         &create_transaction_data.data(),
-        create_transaction_accounts.to_account_metas(None),
+        create_transaction_accounts.to_account_metas(),
     );
 
     // Create proposal instruction
@@ -602,7 +611,7 @@ pub fn create_transaction_and_proposal_message(
     let create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
         &create_proposal_data.data(),
-        create_proposal_accounts.to_account_metas(None),
+        create_proposal_accounts.to_account_metas(),
     );
 
     // Build instructions list
@@ -704,7 +713,7 @@ pub fn create_child_execute_transaction_message(
     child_tx_index: u64,
     parent_member_pubkey: Pubkey,
     child_transaction_accounts: Vec<solana_instruction::AccountMeta>,
-) -> TransactionMessage {
+) -> eyre::Result<TransactionMessage> {
     // Derive child's proposal and transaction PDAs
     let (proposal_pda, _) = get_proposal_pda(
         &child_multisig,
@@ -728,7 +737,10 @@ pub fn create_child_execute_transaction_message(
     let instruction_args = MultisigExecuteTransactionArgs { memo: None };
     let mut instruction_data = Vec::new();
     instruction_data.extend_from_slice(EXECUTE_TRANSACTION_DISCRIMINATOR);
-    instruction_data.extend_from_slice(&borsh::to_vec(&instruction_args).unwrap());
+    instruction_data.extend_from_slice(
+        &borsh::to_vec(&instruction_args)
+            .map_err(|e| eyre::eyre!("Failed to serialize instruction args: {}", e))?,
+    );
 
     // Build metas excluding header accounts (those will be added by accounts struct)
     let header_set: std::collections::HashSet<Pubkey> = [
@@ -747,7 +759,7 @@ pub fn create_child_execute_transaction_message(
             .collect();
 
     let all_metas = accounts.to_account_metas(filtered_dynamic_accounts);
-    let groups = build_account_groups(&all_metas, SQUADS_MULTISIG_PROGRAM_ID);
+    let groups = build_account_groups(&all_metas, SQUADS_MULTISIG_PROGRAM_ID)?;
 
     let compiled = crate::squads::CompiledInstruction {
         program_id_index: groups.program_id_index,
@@ -756,14 +768,14 @@ pub fn create_child_execute_transaction_message(
     };
 
     // Use counts from build_account_groups which are based on the deduplicated list
-    TransactionMessage {
+    Ok(TransactionMessage {
         num_signers: groups.num_signers,
         num_writable_signers: groups.num_writable_signers,
         num_writable_non_signers: groups.num_writable_non_signers,
         account_keys: SmallVec::from(groups.account_keys),
         instructions: SmallVec::from(vec![compiled]),
         address_table_lookups: SmallVec::from(vec![]),
-    }
+    })
 }
 
 /// Build a TransactionMessage for a parent multisig to execute a child's config transaction.
@@ -772,7 +784,7 @@ pub fn create_child_execute_config_transaction_message(
     child_multisig: Pubkey,
     child_tx_index: u64,
     parent_member_pubkey: Pubkey,
-) -> TransactionMessage {
+) -> eyre::Result<TransactionMessage> {
     // Derive child's proposal and transaction PDAs
     let (proposal_pda, _) = get_proposal_pda(&child_multisig, child_tx_index, None);
     let (transaction_pda, _) = get_transaction_pda(&child_multisig, child_tx_index, None);
@@ -789,7 +801,7 @@ pub fn create_child_execute_config_transaction_message(
         AccountMeta::new_readonly(solana_system_interface::program::ID, false),
     ];
 
-    let groups = build_account_groups(&account_metas, SQUADS_MULTISIG_PROGRAM_ID);
+    let groups = build_account_groups(&account_metas, SQUADS_MULTISIG_PROGRAM_ID)?;
 
     let instruction_data = CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR.to_vec();
 
@@ -800,14 +812,14 @@ pub fn create_child_execute_config_transaction_message(
     };
 
     // Use counts from build_account_groups which are based on the deduplicated list
-    TransactionMessage {
+    Ok(TransactionMessage {
         num_signers: groups.num_signers,
         num_writable_signers: groups.num_writable_signers,
         num_writable_non_signers: groups.num_writable_non_signers,
         account_keys: SmallVec::from(groups.account_keys),
         instructions: SmallVec::from(vec![compiled]),
         address_table_lookups: SmallVec::from(vec![]),
-    }
+    })
 }
 
 /// Build a TransactionMessage for a parent multisig to CREATE a child's config transaction
@@ -861,7 +873,7 @@ pub fn create_child_create_config_transaction_and_proposal_message(
         rent_payer: rent_payer_pubkey,
         system_program: solana_system_interface::program::ID,
     }
-    .to_account_metas(None);
+    .to_account_metas();
 
     let proposal_data = MultisigCreateProposalData {
         args: MultisigCreateProposalArgs {
@@ -1130,19 +1142,18 @@ pub fn create_child_execute_paired_proposals_message(
 
     // Step 3: Reorder accounts using build_account_groups
     // This returns the deduplicated, properly ordered account_keys along with the counts
-    let groups = build_account_groups(&unified_metas, SQUADS_MULTISIG_PROGRAM_ID);
+    let groups = build_account_groups(&unified_metas, SQUADS_MULTISIG_PROGRAM_ID)?;
 
     // Step 4: Build vault instruction - map each vault meta to its index in account_keys
-    let vault_account_indexes: Vec<u8> = vault_all_metas
-        .iter()
-        .map(|m| {
-            groups
-                .account_keys
-                .iter()
-                .position(|k| *k == m.pubkey)
-                .expect("vault meta pubkey must be in account_keys") as u8
-        })
-        .collect();
+    let mut vault_account_indexes: Vec<u8> = Vec::with_capacity(vault_all_metas.len());
+    for m in &vault_all_metas {
+        let idx = groups
+            .account_keys
+            .iter()
+            .position(|k| *k == m.pubkey)
+            .ok_or_else(|| eyre::eyre!("vault meta pubkey {} not in account_keys", m.pubkey))?;
+        vault_account_indexes.push(idx as u8);
+    }
 
     let vault_execute_ix = crate::squads::CompiledInstruction {
         program_id_index: groups.program_id_index,
@@ -1151,16 +1162,15 @@ pub fn create_child_execute_paired_proposals_message(
     };
 
     // Step 5: Build config instruction - map each config meta to its index in account_keys
-    let config_account_indexes: Vec<u8> = config_execute_metas
-        .iter()
-        .map(|m| {
-            groups
-                .account_keys
-                .iter()
-                .position(|k| *k == m.pubkey)
-                .expect("config meta pubkey must be in account_keys") as u8
-        })
-        .collect();
+    let mut config_account_indexes: Vec<u8> = Vec::with_capacity(config_execute_metas.len());
+    for m in &config_execute_metas {
+        let idx = groups
+            .account_keys
+            .iter()
+            .position(|k| *k == m.pubkey)
+            .ok_or_else(|| eyre::eyre!("config meta pubkey {} not in account_keys", m.pubkey))?;
+        config_account_indexes.push(idx as u8);
+    }
 
     let config_execute_ix = crate::squads::CompiledInstruction {
         program_id_index: groups.program_id_index,
@@ -1274,13 +1284,13 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
 
     let create_tx_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&create_transaction_accounts.to_account_metas(None)),
+        account_indexes: meta_indexes(&create_transaction_accounts.to_account_metas()),
         data: SmallVec::from(create_transaction_data),
     };
 
     let create_prop_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&create_proposal_accounts.to_account_metas(None)),
+        account_indexes: meta_indexes(&create_proposal_accounts.to_account_metas()),
         data: SmallVec::from(create_proposal_data),
     };
 
@@ -1816,7 +1826,7 @@ mod tests {
             system_program: solana_system_interface::program::ID,
         };
 
-        let tx_metas = create_transaction_accounts.to_account_metas(None);
+        let tx_metas = create_transaction_accounts.to_account_metas();
         assert_eq!(tx_metas.len(), 5);
         assert_eq!(tx_metas[0].pubkey, multisig);
         assert_eq!(tx_metas[1].pubkey, transaction);
@@ -1833,7 +1843,7 @@ mod tests {
             system_program: solana_system_interface::program::ID,
         };
 
-        let proposal_metas = create_proposal_accounts.to_account_metas(None);
+        let proposal_metas = create_proposal_accounts.to_account_metas();
         assert_eq!(proposal_metas.len(), 5);
         assert_eq!(proposal_metas[0].pubkey, multisig);
         assert_eq!(proposal_metas[1].pubkey, proposal);

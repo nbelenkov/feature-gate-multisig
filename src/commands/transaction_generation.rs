@@ -8,6 +8,7 @@ use solana_transaction::versioned::VersionedTransaction;
 
 use crate::squads::{
     get_vault_pda, Multisig as SquadsMultisig, TransactionMessage,
+    PERMISSION_EXECUTE, PERMISSION_INITIATE, PERMISSION_VOTE,
     PROPOSAL_APPROVE_DISCRIMINATOR, PROPOSAL_REJECT_DISCRIMINATOR,
 };
 use crate::{
@@ -144,11 +145,6 @@ fn load_multisig_if_any(
         Err(_) => Ok(None),
     }
 }
-
-/// Permission bits for Squads multisig members
-const PERMISSION_INITIATE: u8 = 1 << 0;
-const PERMISSION_VOTE: u8 = 1 << 1;
-const PERMISSION_EXECUTE: u8 = 1 << 2;
 
 /// Check if a key is a member of the multisig with the required permission mask.
 /// Returns (is_member, has_permission).
@@ -393,13 +389,13 @@ async fn handle_parent_multisig_flow(
             proposal_index,
             parent_vault_member,
             exec,
-        ),
+        )?,
         (ProposalAction::Execute, ChildTransactionFlavor::Config, ParentFlowPayload::None) => {
             create_child_execute_config_transaction_message(
                 feature_gate_multisig_address,
                 proposal_index,
                 parent_vault_member,
-            )
+            )?
         }
         (
             ProposalAction::Execute,
@@ -630,7 +626,7 @@ pub async fn approve_common_feature_gate_proposal(
         }
 
         // EOA flow - approve both proposals atomically in a single transaction
-        approve_paired_proposals_eoa(
+        vote_paired_proposals_eoa(
             &program_id,
             &feature_gate_multisig_address,
             &voting_key,
@@ -638,6 +634,8 @@ pub async fn approve_common_feature_gate_proposal(
             vault_index,
             config_index,
             &rpc_client,
+            crate::squads::PROPOSAL_APPROVE_DISCRIMINATOR,
+            "approve",
         )
         .await?;
 
@@ -702,7 +700,7 @@ pub async fn reject_common_feature_gate_proposal(
         }
 
         // EOA flow - reject both proposals atomically in a single transaction
-        return reject_paired_proposals_eoa(
+        return vote_paired_proposals_eoa(
             &program_id,
             &feature_gate_multisig_address,
             &voting_key,
@@ -710,6 +708,8 @@ pub async fn reject_common_feature_gate_proposal(
             vault_index,
             config_index,
             &rpc_client,
+            crate::squads::PROPOSAL_REJECT_DISCRIMINATOR,
+            "reject",
         )
         .await;
     }
@@ -826,8 +826,8 @@ async fn execute_single_proposal_eoa(
     Ok(())
 }
 
-/// Helper function to approve paired proposals (vault + config) via EOA in a single transaction
-async fn approve_paired_proposals_eoa(
+/// Helper function to vote on paired proposals (vault + config) via EOA in a single transaction
+async fn vote_paired_proposals_eoa(
     program_id: &Pubkey,
     multisig_address: &Pubkey,
     voting_key: &Pubkey,
@@ -835,6 +835,8 @@ async fn approve_paired_proposals_eoa(
     vault_index: u64,
     config_index: u64,
     rpc_client: &RpcClient,
+    discriminator: &[u8],
+    action_name: &str,
 ) -> Result<()> {
     // Permission check: voting_key must be a member with Vote permission
     let child_acc = rpc_client
@@ -843,11 +845,11 @@ async fn approve_paired_proposals_eoa(
     let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
         .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
 
-    verify_member_permission(&child_ms, voting_key, PERMISSION_VOTE, "Approver")?;
+    verify_member_permission(&child_ms, voting_key, PERMISSION_VOTE, "Voter")?;
 
-    // Build and send paired approval transaction
+    // Build and send paired vote transaction
     let blockhash = rpc_client.get_latest_blockhash()?;
-    let approve_msg = crate::provision::create_vote_paired_proposals_message_eoa(
+    let vote_msg = crate::provision::create_vote_paired_proposals_message_eoa(
         program_id,
         multisig_address,
         voting_key,
@@ -855,72 +857,22 @@ async fn approve_paired_proposals_eoa(
         vault_index,
         config_index,
         blockhash,
-        crate::squads::PROPOSAL_APPROVE_DISCRIMINATOR,
+        discriminator,
     )?;
 
     let transaction = VersionedTransaction::try_new(
-        VersionedMessage::V0(approve_msg),
+        VersionedMessage::V0(vote_msg),
         &[fee_payer_signer.as_ref()],
     )?;
 
-    if !confirm_action("Send this approve transaction now?", true) {
-        output::Output::hint("Skipped sending approve transaction.");
+    if !confirm_action(&format!("Send this {} transaction now?", action_name), true) {
+        output::Output::hint(&format!("Skipped sending {} transaction.", action_name));
         return Ok(());
     }
 
     let signature = crate::provision::send_and_confirm_transaction(&transaction, rpc_client)
-        .map_err(|e| eyre::eyre!("Failed to send approve transaction: {}", e))?;
-    output::Output::field("Transaction sent successfully:", &signature);
-    output::Output::field("Config change approved (sig):", &signature);
-    Ok(())
-}
-
-/// Helper function to reject paired proposals (vault + config) via EOA in a single transaction
-async fn reject_paired_proposals_eoa(
-    program_id: &Pubkey,
-    multisig_address: &Pubkey,
-    voting_key: &Pubkey,
-    fee_payer_signer: &Box<dyn Signer>,
-    vault_index: u64,
-    config_index: u64,
-    rpc_client: &RpcClient,
-) -> Result<()> {
-    // Permission check: voting_key must be a member with Vote permission
-    let child_acc = rpc_client
-        .get_account(multisig_address)
-        .map_err(|e| eyre::eyre!("Failed to fetch multisig account: {}", e))?;
-    let child_ms: SquadsMultisig = BorshDeserialize::deserialize(&mut &child_acc.data[8..])
-        .map_err(|e| eyre::eyre!("Failed to deserialize multisig: {}", e))?;
-
-    verify_member_permission(&child_ms, voting_key, PERMISSION_VOTE, "Rejector")?;
-
-    // Build and send paired rejection transaction
-    let blockhash = rpc_client.get_latest_blockhash()?;
-    let reject_msg = crate::provision::create_vote_paired_proposals_message_eoa(
-        program_id,
-        multisig_address,
-        voting_key,
-        &fee_payer_signer.pubkey(),
-        vault_index,
-        config_index,
-        blockhash,
-        crate::squads::PROPOSAL_REJECT_DISCRIMINATOR,
-    )?;
-
-    let transaction = VersionedTransaction::try_new(
-        VersionedMessage::V0(reject_msg),
-        &[fee_payer_signer.as_ref()],
-    )?;
-
-    if !confirm_action("Send this reject transaction now?", true) {
-        output::Output::hint("Skipped sending reject transaction.");
-        return Ok(());
-    }
-
-    let signature = crate::provision::send_and_confirm_transaction(&transaction, rpc_client)
-        .map_err(|e| eyre::eyre!("Failed to send reject transaction: {}", e))?;
-    output::Output::field("Reject transaction sent successfully:", &signature);
-    output::Output::field("Both proposals rejected (sig):", &signature);
+        .map_err(|e| eyre::eyre!("Failed to send {} transaction: {}", action_name, e))?;
+    output::Output::field(&format!("{} transaction sent successfully:", action_name), &signature);
     Ok(())
 }
 
@@ -1505,7 +1457,7 @@ pub async fn rekey_multisig_feature_gate(
             rent_payer: fee_payer_signer.pubkey(),
             system_program: Pubkey::from_str_const("11111111111111111111111111111111"),
         }
-        .to_account_metas(None),
+        .to_account_metas(),
     );
 
     // Confirm before sending
