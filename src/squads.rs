@@ -1,7 +1,27 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use eyre::Result;
 use solana_pubkey::Pubkey;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
+
+/// Trait for instruction data serialization with discriminator prefix.
+/// Provides a default `.data()` implementation that combines discriminator + borsh serialization.
+pub trait InstructionData {
+    /// The 8-byte discriminator for this instruction
+    const DISCRIMINATOR: &'static [u8];
+
+    /// Serialize the instruction-specific arguments to bytes
+    fn serialize_args(&self) -> Result<Vec<u8>>;
+
+    /// Build the full instruction data: discriminator + serialized args
+    fn data(&self) -> Result<Vec<u8>> {
+        let args_bytes = self.serialize_args()?;
+        let mut data = Vec::with_capacity(Self::DISCRIMINATOR.len() + args_bytes.len());
+        data.extend_from_slice(Self::DISCRIMINATOR);
+        data.extend_from_slice(&args_bytes);
+        Ok(data)
+    }
+}
 
 pub const CREATE_MULTISIG_V2_DISCRIMINATOR: &[u8] = &[50, 221, 199, 93, 40, 245, 139, 233];
 
@@ -264,12 +284,12 @@ pub struct VaultTransactionCreateArgs {
     pub memo: Option<String>,
 }
 
-impl VaultTransactionCreateArgsData {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(CREATE_TRANSACTION_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for VaultTransactionCreateArgsData {
+    const DISCRIMINATOR: &'static [u8] = CREATE_TRANSACTION_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize VaultTransactionCreateArgs: {}", e))
     }
 }
 
@@ -290,12 +310,12 @@ pub struct MultisigCreateV2Data {
     pub args: MultisigCreateArgsV2,
 }
 
-impl MultisigCreateV2Data {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(CREATE_MULTISIG_V2_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for MultisigCreateV2Data {
+    const DISCRIMINATOR: &'static [u8] = CREATE_MULTISIG_V2_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize MultisigCreateArgsV2: {}", e))
     }
 }
 
@@ -323,12 +343,12 @@ pub struct MultisigCreateProposalData {
     pub args: MultisigCreateProposalArgs,
 }
 
-impl MultisigCreateProposalData {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(CREATE_PROPOSAL_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for MultisigCreateProposalData {
+    const DISCRIMINATOR: &'static [u8] = CREATE_PROPOSAL_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize MultisigCreateProposalArgs: {}", e))
     }
 }
 
@@ -348,12 +368,12 @@ pub struct ConfigTransactionCreateData {
     pub args: ConfigTransactionCreateArgs,
 }
 
-impl ConfigTransactionCreateData {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(CONFIG_TRANSACTION_CREATE_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for ConfigTransactionCreateData {
+    const DISCRIMINATOR: &'static [u8] = CONFIG_TRANSACTION_CREATE_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize ConfigTransactionCreateArgs: {}", e))
     }
 }
 
@@ -411,21 +431,21 @@ impl MultisigVoteOnProposalAccounts {
     }
 }
 
-impl MultisigApproveProposalData {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(PROPOSAL_APPROVE_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for MultisigApproveProposalData {
+    const DISCRIMINATOR: &'static [u8] = PROPOSAL_APPROVE_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize MultisigVoteOnProposalArgs: {}", e))
     }
 }
 
-impl MultisigRejectProposalData {
-    pub fn data(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(PROPOSAL_REJECT_DISCRIMINATOR);
-        data.extend_from_slice(&borsh::to_vec(&self.args).unwrap());
-        data
+impl InstructionData for MultisigRejectProposalData {
+    const DISCRIMINATOR: &'static [u8] = PROPOSAL_REJECT_DISCRIMINATOR;
+
+    fn serialize_args(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(&self.args)
+            .map_err(|e| eyre::eyre!("Failed to serialize MultisigVoteOnProposalArgs: {}", e))
     }
 }
 

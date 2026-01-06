@@ -291,8 +291,8 @@ pub fn create_child_vote_approve_transaction_message(
     parent_member_pubkey: Pubkey,
 ) -> Result<TransactionMessage> {
     use crate::squads::{
-        get_proposal_pda, MultisigApproveProposalData, MultisigVoteOnProposalAccounts,
-        MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
+        get_proposal_pda, InstructionData, MultisigApproveProposalData,
+        MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
     };
     use solana_instruction::Instruction;
 
@@ -315,7 +315,7 @@ pub fn create_child_vote_approve_transaction_message(
 
     let ix = Instruction::new_with_bytes(
         SQUADS_MULTISIG_PROGRAM_ID,
-        &data.data(),
+        &data.data()?,
         accounts.to_account_metas(),
     );
 
@@ -330,8 +330,8 @@ pub fn create_child_vote_reject_transaction_message(
     parent_member_pubkey: Pubkey,
 ) -> Result<TransactionMessage> {
     use crate::squads::{
-        get_proposal_pda, MultisigRejectProposalData, MultisigVoteOnProposalAccounts,
-        MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
+        get_proposal_pda, InstructionData, MultisigRejectProposalData,
+        MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, SQUADS_MULTISIG_PROGRAM_ID,
     };
     use solana_instruction::Instruction;
 
@@ -352,7 +352,7 @@ pub fn create_child_vote_reject_transaction_message(
 
     let ix = Instruction::new_with_bytes(
         SQUADS_MULTISIG_PROGRAM_ID,
-        &data.data(),
+        &data.data()?,
         accounts.to_account_metas(),
     );
 
@@ -391,9 +391,9 @@ pub async fn create_and_send_paired_proposals(
 ) -> Result<()> {
     use crate::squads::{
         get_proposal_pda, get_transaction_pda, ConfigTransactionCreateArgs,
-        ConfigTransactionCreateData, MultisigCreateProposalAccounts, MultisigCreateProposalArgs,
-        MultisigCreateProposalData, MultisigCreateTransaction, VaultTransactionCreateArgs,
-        VaultTransactionCreateArgsData, SQUADS_MULTISIG_PROGRAM_ID,
+        ConfigTransactionCreateData, InstructionData, MultisigCreateProposalAccounts,
+        MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
+        VaultTransactionCreateArgs, VaultTransactionCreateArgsData, SQUADS_MULTISIG_PROGRAM_ID,
     };
     use solana_instruction::Instruction;
     use solana_message::v0::Message;
@@ -443,7 +443,7 @@ pub async fn create_and_send_paired_proposals(
 
     let vault_create_transaction_instruction = Instruction::new_with_bytes(
         *program_id,
-        &vault_create_transaction_data.data(),
+        &vault_create_transaction_data.data()?,
         vault_create_transaction_accounts.to_account_metas(),
     );
     instructions.push(vault_create_transaction_instruction);
@@ -466,7 +466,7 @@ pub async fn create_and_send_paired_proposals(
 
     let vault_create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
-        &vault_create_proposal_data.data(),
+        &vault_create_proposal_data.data()?,
         vault_create_proposal_accounts.to_account_metas(),
     );
     instructions.push(vault_create_proposal_instruction);
@@ -492,7 +492,7 @@ pub async fn create_and_send_paired_proposals(
 
     let config_create_transaction_instruction = Instruction::new_with_bytes(
         *program_id,
-        &config_create_transaction_data.data(),
+        &config_create_transaction_data.data()?,
         config_create_transaction_accounts,
     );
     instructions.push(config_create_transaction_instruction);
@@ -515,7 +515,7 @@ pub async fn create_and_send_paired_proposals(
 
     let config_create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
-        &config_create_proposal_data.data(),
+        &config_create_proposal_data.data()?,
         config_create_proposal_accounts.to_account_metas(),
     );
     instructions.push(config_create_proposal_instruction);

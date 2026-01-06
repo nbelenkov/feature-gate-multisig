@@ -7,9 +7,9 @@ use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::squads::{
-    get_vault_pda, Multisig as SquadsMultisig, TransactionMessage,
-    PERMISSION_EXECUTE, PERMISSION_INITIATE, PERMISSION_VOTE,
-    PROPOSAL_APPROVE_DISCRIMINATOR, PROPOSAL_REJECT_DISCRIMINATOR,
+    get_vault_pda, InstructionData, Multisig as SquadsMultisig, TransactionMessage,
+    PERMISSION_EXECUTE, PERMISSION_INITIATE, PERMISSION_VOTE, PROPOSAL_APPROVE_DISCRIMINATOR,
+    PROPOSAL_REJECT_DISCRIMINATOR,
 };
 use crate::{
     output,
@@ -372,7 +372,7 @@ async fn handle_parent_multisig_flow(
             vault_index,
             config_index,
             parent_vault_member,
-        ),
+        )?,
         (ProposalAction::Reject, _, ParentFlowPayload::None) => {
             create_child_vote_reject_transaction_message(
                 feature_gate_multisig_address,
@@ -434,7 +434,7 @@ async fn handle_parent_multisig_flow(
                 parent_vault_member,
                 fee_payer_signer.pubkey(),
                 msg,
-            )
+            )?
         }
         (ProposalAction::Create, _, ParentFlowPayload::Create(msg)) => msg,
         (ProposalAction::Execute, ChildTransactionFlavor::Vault, _) => {
@@ -1245,7 +1245,7 @@ pub async fn create_feature_gate_proposal(
             &fee_payer_signer,
             &rpc_url,
             ProposalAction::Create,
-            ParentFlowPayload::Create(config_message),
+            ParentFlowPayload::Create(config_message?),
         )
         .await?;
 
@@ -1397,7 +1397,7 @@ pub async fn rekey_multisig_feature_gate(
             &fee_payer_signer,
             &rpc_url,
             ProposalAction::Create,
-            ParentFlowPayload::Create(child_tx_message),
+            ParentFlowPayload::Create(child_tx_message?),
         )
         .await;
     }
@@ -1427,7 +1427,7 @@ pub async fn rekey_multisig_feature_gate(
 
     let create_tx_instruction = solana_instruction::Instruction::new_with_bytes(
         program_id,
-        &create_tx_data.data(),
+        &create_tx_data.data()?,
         vec![
             solana_instruction::AccountMeta::new(feature_gate_multisig_address, false),
             solana_instruction::AccountMeta::new(tx_pda, false),
@@ -1449,7 +1449,7 @@ pub async fn rekey_multisig_feature_gate(
                 is_draft: false,
             },
         }
-        .data(),
+        .data()?,
         crate::squads::MultisigCreateProposalAccounts {
             multisig: feature_gate_multisig_address,
             proposal: proposal_pda,

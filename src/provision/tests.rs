@@ -1,5 +1,5 @@
 use super::*;
-use crate::squads::{CompiledInstruction, SmallVec, TransactionMessage};
+use crate::squads::{CompiledInstruction, InstructionData, SmallVec, TransactionMessage};
 use borsh::BorshDeserialize;
 
 fn create_test_transaction_message() -> TransactionMessage {
@@ -78,7 +78,7 @@ fn test_create_transaction_data_serialization() {
     };
 
     // Serialize the data
-    let serialized_data = create_transaction_data.data();
+    let serialized_data = create_transaction_data.data().unwrap();
 
     // Check that it starts with the correct discriminator
     assert_eq!(
@@ -93,9 +93,10 @@ fn test_create_transaction_data_serialization() {
     assert_eq!(deserialized_args.vault_index, 0);
     assert_eq!(deserialized_args.ephemeral_signers, 0);
     assert_eq!(deserialized_args.memo, None);
-    
+
     // Deserialize the transaction message bytes and verify
-    let deserialized_transaction_message = TransactionMessage::try_from_slice(&deserialized_args.transaction_message).unwrap();
+    let deserialized_transaction_message =
+        TransactionMessage::try_from_slice(&deserialized_args.transaction_message).unwrap();
     assert_eq!(
         deserialized_transaction_message.num_signers,
         transaction_message.num_signers
@@ -116,7 +117,7 @@ fn test_create_proposal_data_serialization() {
     };
 
     // Serialize the data
-    let serialized_data = create_proposal_data.data();
+    let serialized_data = create_proposal_data.data().unwrap();
 
     // Check that it starts with the correct discriminator
     assert_eq!(

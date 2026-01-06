@@ -1,13 +1,14 @@
 use crate::constants::*;
 use crate::squads::{
     get_multisig_pda, get_program_config_pda, get_proposal_pda, get_transaction_pda, get_vault_pda,
-    CompiledInstruction, Member, MultisigCreateArgsV2, MultisigCreateProposalAccounts,
-    MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
-    MultisigCreateV2Accounts, MultisigCreateV2Data, MultisigExecuteTransactionAccounts,
-    MultisigExecuteTransactionArgs, MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs,
-    ProgramConfig, SmallVec, TransactionMessage, VaultTransactionCreateArgs,
-    VaultTransactionCreateArgsData, CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR,
-    EXECUTE_TRANSACTION_DISCRIMINATOR, SQUADS_MULTISIG_PROGRAM_ID,
+    CompiledInstruction, InstructionData, Member, MultisigCreateArgsV2,
+    MultisigCreateProposalAccounts, MultisigCreateProposalArgs, MultisigCreateProposalData,
+    MultisigCreateTransaction, MultisigCreateV2Accounts, MultisigCreateV2Data,
+    MultisigExecuteTransactionAccounts, MultisigExecuteTransactionArgs,
+    MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, ProgramConfig, SmallVec,
+    TransactionMessage, VaultTransactionCreateArgs, VaultTransactionCreateArgsData,
+    CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR, EXECUTE_TRANSACTION_DISCRIMINATOR,
+    SQUADS_MULTISIG_PROGRAM_ID,
 };
 
 use crate::utils::{decode_permissions, get_network_display};
@@ -535,7 +536,7 @@ pub async fn create_multisig(
                         rent_collector: None,
                     },
                 }
-                .data(),
+                .data()?,
                 program_id,
             },
         ],
@@ -606,7 +607,7 @@ pub fn create_transaction_and_proposal_message(
 
     let create_transaction_instruction = Instruction::new_with_bytes(
         *program_id,
-        &create_transaction_data.data(),
+        &create_transaction_data.data()?,
         create_transaction_accounts.to_account_metas(),
     );
 
@@ -628,7 +629,7 @@ pub fn create_transaction_and_proposal_message(
 
     let create_proposal_instruction = Instruction::new_with_bytes(
         *program_id,
-        &create_proposal_data.data(),
+        &create_proposal_data.data()?,
         create_proposal_accounts.to_account_metas(),
     );
 
@@ -834,11 +835,11 @@ pub fn create_child_create_config_transaction_and_proposal_message(
     rent_payer_pubkey: Pubkey,
     actions: Vec<crate::squads::ConfigAction>,
     memo: Option<String>,
-) -> TransactionMessage {
+) -> eyre::Result<TransactionMessage> {
     use crate::squads::{
-        ConfigTransactionCreateArgs, ConfigTransactionCreateData, MultisigCreateProposalAccounts,
-        MultisigCreateProposalArgs, MultisigCreateProposalData, SmallVec,
-        SQUADS_MULTISIG_PROGRAM_ID,
+        ConfigTransactionCreateArgs, ConfigTransactionCreateData, InstructionData,
+        MultisigCreateProposalAccounts, MultisigCreateProposalArgs, MultisigCreateProposalData,
+        SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
     };
 
     let (transaction_pda, _) = get_transaction_pda(
@@ -864,7 +865,7 @@ pub fn create_child_create_config_transaction_and_proposal_message(
     let config_create_data = ConfigTransactionCreateData {
         args: ConfigTransactionCreateArgs { actions, memo },
     }
-    .data();
+    .data()?;
 
     // Instruction: ProposalCreate
     let proposal_accounts = MultisigCreateProposalAccounts {
@@ -882,7 +883,7 @@ pub fn create_child_create_config_transaction_and_proposal_message(
             is_draft: false,
         },
     }
-    .data();
+    .data()?;
 
     // Union of all accounts + program id. Signers must be first in account_keys.
     let account_keys: Vec<Pubkey> = vec![
@@ -923,14 +924,14 @@ pub fn create_child_create_config_transaction_and_proposal_message(
         data: SmallVec::from(proposal_data),
     };
 
-    TransactionMessage {
+    Ok(TransactionMessage {
         num_signers: 2,
         num_writable_signers: 1, // first signer (rent payer) writable; second signer (creator) readonly
         num_writable_non_signers: 3, // multisig, transaction, proposal
         account_keys: SmallVec::from(account_keys),
         instructions: SmallVec::from(vec![config_ix, proposal_ix]),
         address_table_lookups: SmallVec::from(vec![]),
-    }
+    })
 }
 
 /// Build a TransactionMessage for a parent multisig to APPROVE both a vault proposal and its paired
@@ -942,10 +943,11 @@ pub fn create_child_approve_paired_proposals_message(
     vault_proposal_index: u64,
     config_proposal_index: u64,
     parent_member_pubkey: Pubkey,
-) -> TransactionMessage {
+) -> eyre::Result<TransactionMessage> {
     use crate::squads::{
-        get_proposal_pda, MultisigApproveProposalData, MultisigVoteOnProposalAccounts,
-        MultisigVoteOnProposalArgs, SmallVec, SQUADS_MULTISIG_PROGRAM_ID,
+        get_proposal_pda, InstructionData, MultisigApproveProposalData,
+        MultisigVoteOnProposalAccounts, MultisigVoteOnProposalArgs, SmallVec,
+        SQUADS_MULTISIG_PROGRAM_ID,
     };
 
     // Get PDAs for both proposals
@@ -969,7 +971,7 @@ pub fn create_child_approve_paired_proposals_message(
     let vault_approve_data = MultisigApproveProposalData {
         args: MultisigVoteOnProposalArgs { memo: None },
     }
-    .data();
+    .data()?;
 
     // Instruction 2: Approve config proposal
     let config_approve_accounts = MultisigVoteOnProposalAccounts {
@@ -980,7 +982,7 @@ pub fn create_child_approve_paired_proposals_message(
     let config_approve_data = MultisigApproveProposalData {
         args: MultisigVoteOnProposalArgs { memo: None },
     }
-    .data();
+    .data()?;
 
     // Build unified account_keys list
     // Must follow Solana order: writable signers, readonly signers, writable non-signers, readonly non-signers
@@ -1020,14 +1022,14 @@ pub fn create_child_approve_paired_proposals_message(
         data: SmallVec::from(config_approve_data),
     };
 
-    TransactionMessage {
+    Ok(TransactionMessage {
         num_signers: 1,
         num_writable_signers: 1, // parent_member_pubkey is writable signer
         num_writable_non_signers: 2, // vault_proposal, config_proposal (multisig is readonly)
         account_keys: SmallVec::from(account_keys),
         instructions: SmallVec::from(vec![vault_approve_ix, config_approve_ix]),
         address_table_lookups: SmallVec::from(vec![]),
-    }
+    })
 }
 
 /// Build a TransactionMessage for a parent multisig to EXECUTE both a vault proposal and its paired
@@ -1144,9 +1146,9 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
     parent_member_pubkey: Pubkey,
     rent_payer_pubkey: Pubkey,
     transaction_message: TransactionMessage,
-) -> TransactionMessage {
+) -> eyre::Result<TransactionMessage> {
     use crate::squads::{
-        get_proposal_pda, get_transaction_pda, MultisigCreateProposalAccounts,
+        get_proposal_pda, get_transaction_pda, InstructionData, MultisigCreateProposalAccounts,
         MultisigCreateProposalArgs, MultisigCreateProposalData, MultisigCreateTransaction,
         SmallVec, VaultTransactionCreateArgs, VaultTransactionCreateArgsData,
         SQUADS_MULTISIG_PROGRAM_ID,
@@ -1176,12 +1178,11 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
         args: VaultTransactionCreateArgs {
             vault_index: 0,
             ephemeral_signers: 0,
-            transaction_message: borsh::to_vec(&transaction_message)
-                .expect("serialize transaction_message"),
+            transaction_message: borsh::to_vec(&transaction_message)?,
             memo: None,
         },
     }
-    .data();
+    .data()?;
 
     // Instruction: ProposalCreate
     let create_proposal_accounts = MultisigCreateProposalAccounts {
@@ -1198,7 +1199,7 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
             is_draft: false,
         },
     }
-    .data();
+    .data()?;
 
     // Union of all accounts + program id. Signers must be first in account_keys.
     let account_keys: Vec<Pubkey> = vec![
@@ -1239,14 +1240,14 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
         data: SmallVec::from(create_proposal_data),
     };
 
-    TransactionMessage {
+    Ok(TransactionMessage {
         num_signers: 2,
         num_writable_signers: 1, // rent payer writable signer; creator readonly signer
         num_writable_non_signers: 3, // multisig, transaction, proposal
         account_keys: SmallVec::from(account_keys),
         instructions: SmallVec::from(vec![create_tx_ix, create_prop_ix]),
         address_table_lookups: SmallVec::from(vec![]),
-    }
+    })
 }
 
 /// Build a TransactionMessage for feature gate activation or revocation.
@@ -1554,7 +1555,7 @@ mod tests {
         };
 
         // Serialize the data
-        let serialized_data = create_transaction_data.data();
+        let serialized_data = create_transaction_data.data().unwrap();
 
         // Check that it starts with the correct discriminator
         assert_eq!(
@@ -1593,7 +1594,7 @@ mod tests {
         };
 
         // Serialize the data
-        let serialized_data = create_proposal_data.data();
+        let serialized_data = create_proposal_data.data().unwrap();
 
         // Check that it starts with the correct discriminator
         assert_eq!(
@@ -1902,7 +1903,7 @@ mod tests {
         // Create the full data structure
         let create_transaction_data = VaultTransactionCreateArgsData { args: vault_args };
 
-        let full_data = create_transaction_data.data();
+        let full_data = create_transaction_data.data().unwrap();
         println!("  full data length: {}", full_data.len());
 
         // Convert to hex string like the blockchain data
