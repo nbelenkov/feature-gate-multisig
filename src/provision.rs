@@ -41,6 +41,25 @@ pub fn create_rpc_client(url: &str) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::confirmed())
 }
 
+/// Helper function to map account metas to their indexes in the account_keys array.
+/// Returns an error if any pubkey is not found in account_keys.
+fn map_metas_to_indexes(
+    metas: &[solana_instruction::AccountMeta],
+    account_keys: &[Pubkey],
+) -> eyre::Result<crate::squads::SmallVec<u8, u8>> {
+    let idxs: Vec<u8> = metas
+        .iter()
+        .map(|m| {
+            account_keys
+                .iter()
+                .position(|k| *k == m.pubkey)
+                .map(|i| i as u8)
+                .ok_or_else(|| eyre::eyre!("Account {} not found in account_keys", m.pubkey))
+        })
+        .collect::<eyre::Result<Vec<u8>>>()?;
+    Ok(crate::squads::SmallVec::from(idxs))
+}
+
 /// Convert a list of Instructions into a Squads TransactionMessage by sorting and
 /// deduplicating accounts, then computing the header counts.
 ///
@@ -248,7 +267,7 @@ pub fn send_and_confirm_transaction(
 
                 println!(
                     "Retryable error occurred: {}",
-                    last_error.as_ref().unwrap().to_string().bright_yellow()
+                    last_error.as_ref().map(|e| e.to_string()).unwrap_or_default().bright_yellow()
                 );
                 continue;
             }
@@ -376,7 +395,7 @@ pub fn get_account_data_with_retry(
     Err(eyre!(
         "Failed to get account data after {} attempts: {}",
         MAX_RETRIES,
-        last_error.unwrap().to_string()
+        last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".to_string())
     ))
 }
 pub async fn create_multisig(
@@ -898,29 +917,15 @@ pub fn create_child_create_config_transaction_and_proposal_message(
 
     let program_id_index = 6u8;
 
-    // Helper to map metas to indexes in account_keys
-    let meta_indexes = |metas: &[solana_instruction::AccountMeta]| -> SmallVec<u8, u8> {
-        let idxs: Vec<u8> = metas
-            .iter()
-            .map(|m| {
-                account_keys
-                    .iter()
-                    .position(|k| *k == m.pubkey)
-                    .expect("meta pubkey present in account_keys") as u8
-            })
-            .collect();
-        SmallVec::from(idxs)
-    };
-
     let config_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&config_create_accounts),
+        account_indexes: map_metas_to_indexes(&config_create_accounts, &account_keys)?,
         data: SmallVec::from(config_create_data),
     };
 
     let proposal_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&proposal_accounts),
+        account_indexes: map_metas_to_indexes(&proposal_accounts, &account_keys)?,
         data: SmallVec::from(proposal_data),
     };
 
@@ -996,29 +1001,15 @@ pub fn create_child_approve_paired_proposals_message(
 
     let program_id_index = 4u8;
 
-    // Helper to map metas to indexes in account_keys
-    let meta_indexes = |metas: &[solana_instruction::AccountMeta]| -> SmallVec<u8, u8> {
-        let idxs: Vec<u8> = metas
-            .iter()
-            .map(|m| {
-                account_keys
-                    .iter()
-                    .position(|k| *k == m.pubkey)
-                    .expect("meta pubkey present in account_keys") as u8
-            })
-            .collect();
-        SmallVec::from(idxs)
-    };
-
     let vault_approve_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&vault_approve_accounts.to_account_metas()),
+        account_indexes: map_metas_to_indexes(&vault_approve_accounts.to_account_metas(), &account_keys)?,
         data: SmallVec::from(vault_approve_data),
     };
 
     let config_approve_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&config_approve_accounts.to_account_metas()),
+        account_indexes: map_metas_to_indexes(&config_approve_accounts.to_account_metas(), &account_keys)?,
         data: SmallVec::from(config_approve_data),
     };
 
@@ -1214,29 +1205,15 @@ pub fn create_child_create_vault_transaction_and_proposal_message(
 
     let program_id_index = 6u8;
 
-    // Helper to map metas to indexes in account_keys
-    let meta_indexes = |metas: &[solana_instruction::AccountMeta]| -> SmallVec<u8, u8> {
-        let idxs: Vec<u8> = metas
-            .iter()
-            .map(|m| {
-                account_keys
-                    .iter()
-                    .position(|k| *k == m.pubkey)
-                    .expect("meta pubkey present in account_keys") as u8
-            })
-            .collect();
-        SmallVec::from(idxs)
-    };
-
     let create_tx_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&create_transaction_accounts.to_account_metas()),
+        account_indexes: map_metas_to_indexes(&create_transaction_accounts.to_account_metas(), &account_keys)?,
         data: SmallVec::from(create_transaction_data),
     };
 
     let create_prop_ix = crate::squads::CompiledInstruction {
         program_id_index,
-        account_indexes: meta_indexes(&create_proposal_accounts.to_account_metas()),
+        account_indexes: map_metas_to_indexes(&create_proposal_accounts.to_account_metas(), &account_keys)?,
         data: SmallVec::from(create_proposal_data),
     };
 
@@ -1301,7 +1278,8 @@ pub fn create_execute_transaction_message(
 
     let transaction_account_data = rpc_client.get_account_data(&transaction_pda)?;
     let transaction_contents =
-        VaultTransaction::try_from_slice(&transaction_account_data[8..]).unwrap();
+        VaultTransaction::try_from_slice(&transaction_account_data[8..])
+            .map_err(|e| eyre::eyre!("Failed to deserialize vault transaction at {}: {}", transaction_pda, e))?;
     let transaction_message = transaction_contents.message;
 
     let mut execution_account_metas = Vec::new();
