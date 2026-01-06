@@ -10,5 +10,5 @@
     "https://api.testnet.solana.com",
     "https://api.mainnet-beta.solana.com"
   ],
-  "network": "https://api.devnet.solana.com"
+  "fee_payer_path": "usb://ledger"
 }

@@ -1,146 +1,134 @@
 # Feature Gate Multisig Tool
 
-This CLI tool enables the creation of feature gate multisigs across all Solana networks (mainnet, devnet, testnet) leveraging the Squads multisig program. It enables the distribution of keys required to activate or revoke pending feature activations through governance.
-
-## How It Works
-
-The configuration file dictates the members and parent multisigs for the feature gate multisig to be created. The fee payer keypair is used to pay transaction fees and sets up the multisig configurations and proposals for a given feature gate.
-
-**Proposals are always created in the following order:**
-1. **Feature Activation Proposal** (Index 1)
-2. **Feature Activation Revocation Proposal** (Index 2)
-
-Once a feature gate multisig has been created, the CLI exposes transaction generation functionality to enable voting on either proposal and executing them when the threshold is met.
-
-## Key Features
-
-- **Multi-Network Deployment**: Deploy identical multisigs across mainnet, devnet, and testnet
-- **Persistent Configuration**: Saved member lists and network settings for reuse
-- **Transaction Generation**: Create voting transactions for feature activation/revocation
-- **Interactive Mode**: Guided setup with prompts and validation
+CLI tool for creating and managing Solana feature gate multisigs using the Squads protocol. Enables collective governance over Solana feature activations and revocations.
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/Squads-Protocol/feature-gate-multisig.git
 cd feature-gate-multisig
-
-# Build the project
 cargo build --release
-
-# The binary will be available at ./target/release/feature-gate-multisig-tool
 ```
 
-## Usage
+Binary: `./target/release/feature-gate-multisig-tool`
 
-### Commands
+## Quick Start
 
 ```bash
-# Create a new feature gate multisig
-feature-gate-multisig-tool create --keypair ~/.config/solana/id.json
-
-# Show existing multisig details
-feature-gate-multisig-tool show <MULTISIG_ADDRESS>
-
-# Interactive mode (default)
+# Interactive mode (recommended)
 feature-gate-multisig-tool
 
-# Show configuration
+# Direct commands
+feature-gate-multisig-tool create --keypair ~/.config/solana/id.json
+feature-gate-multisig-tool show <MULTISIG_ADDRESS>
 feature-gate-multisig-tool config
 ```
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `create` | Create a new feature gate multisig with paired proposals |
+| `show <address>` | Display multisig details, members, and proposal status |
+| `config` | Show saved configuration |
+| `interactive` | Launch interactive menu (default) |
+
+## Interactive Mode
+
+> **See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for detailed step-by-step examples.**
+
+The interactive menu provides:
+- **Create new feature gate multisig** - Guided setup with member collection
+- **Show multisig details** - Inspect any multisig address
+- **Proposal Actions** - Create/Approve/Reject/Execute proposals
+- **Show configuration** - View saved settings
+
+### Proposal Actions
+
+Supports three transaction types:
+- **Activate Feature Gate** - Enable a Solana feature gate
+- **Revoke Feature Gate** - Cancel a pending activation
+- **Rekey Multisig** - Brick the multisig (rekey use only)
+
+Each supports: Create, Approve, Reject, Execute
+
+## Proposal Structure
+
+When a multisig is created, two proposals are automatically generated:
+
+| Index | Type | Purpose |
+|-------|------|---------|
+| 1 | Vault Transaction | Feature Activation |
+| 2 | Config Transaction | Lower threshold to 1 |
+
+**Note**: Interacting with feature gate activation will auto handle Vault + Config transaction.
+
+Revocation proposals are **not** pre-created. If you need to revoke a feature, create a new revocation proposal using "Proposal Actions" → "Revoke Feature Gate" → "Create". See [Emergency Revocation workflow](docs/WORKFLOWS.md#4-emergency-revocation) for details.
+
+## Parent → Child Multisig Voting
+
+For programmatic voting from a parent multisig:
+
+> **Important**: Add the parent's **vault PDA** (not multisig address) as a member of the child multisig with Vote/Execute permissions.
+
+The **fee payer keypair** must be a member of the parent multisig with full permissions. The fee payer's signature is used to create/approve/execute proposals on the parent multisig.
+
+The parent multisig address cannot sign during CPI - only the vault PDA can be signed for using PDA seeds.
+
+```
+Parent vault PDA = get_vault_pda(parent_multisig, 0)
+```
+
+The CLI will display the required PDA if misconfigured. See [Parent Multisig Voting workflow](docs/WORKFLOWS.md#3-activating-a-feature-parent-multisig-voting) for detailed steps.
+
 ## Configuration
 
-The tool saves configuration to `~/.feature-gate-multisig-tool/config.json`:
+Stored at `~/.feature-gate-multisig-tool/config.json`:
 
 ```json
 {
   "threshold": 2,
-  "members": [
-    "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-    "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
-  ],
-  "networks": [
-    "https://api.devnet.solana.com",
-    "https://api.testnet.solana.com",
-    "https://api.mainnet-beta.solana.com"
-  ],
-  "network": "https://api.devnet.solana.com",
+  "members": ["<pubkey1>", "<pubkey2>"],
+  "networks": ["https://api.devnet.solana.com"],
   "fee_payer_path": "usb://ledger"
 }
 ```
 
-## Transaction Generation
-
-Once a multisig is created, use the transaction generation commands to:
-- Vote on Feature Activation Proposal (Index 1)
-- Vote on Feature Activation Revocation Proposal (Index 2)
-- Execute proposals when threshold is met
-
-### Parent → Child multisig voting
-
-If a parent multisig is configured to vote on a proposal in a child multisig, the child multisig must include the parent vault PDA as a member with Vote permission (not the parent multisig address itself).
-
-Why: During execution, the parent program can sign for its vault PDA using PDA seeds, but it cannot sign as the parent multisig address in CPI. Listing the parent multisig address as the voter will lead to missing/invalid signer errors. Listing the parent vault PDA avoids this and enables programmatic approval.
-
-What to add to the child multisig:
-- Member: Parent vault PDA (usually index 0)
-- Permissions: Vote (and optionally Execute if the parent should execute child proposals)
-
-The CLI will print a clear error and the exact PDA to add if the child multisig isn’t configured correctly.
+| Field | Description |
+|-------|-------------|
+| `threshold` | Required signatures |
+| `members` | Saved member public keys |
+| `networks` | RPC endpoints for deployment |
+| `fee_payer_path` | Keypair path (file or `usb://ledger`) |
 
 ## Network Support
 
-Supports deployment to any Solana network:
-- **Mainnet Beta**: `https://api.mainnet-beta.solana.com`
-- **Devnet**: `https://api.devnet.solana.com`
-- **Testnet**: `https://api.testnet.solana.com`
-- **Custom RPC**: Any valid Solana RPC endpoint
+- Mainnet: `https://api.mainnet-beta.solana.com`
+- Devnet: `https://api.devnet.solana.com`
+- Testnet: `https://api.testnet.solana.com`
+- Custom RPC endpoints supported
 
 ## Testing
 
 ```bash
-# Run all tests
+# Unit tests
 cargo test
 
-# Run with output
-cargo test -- --nocapture
+# E2E tests (requires surfpool)
+make test-surfpool
 ```
 
-## Testing setup e2e
+### E2E Setup
 
-Install surfpool:
 ```bash
+# Install surfpool
 curl -sL https://run.surfpool.run/ | bash
-```
+# Or: brew install txtx/taps/surfpool
 
-Or via Homebrew (macOS):
-```bash
-brew tap txtx/taps
-brew install txtx/taps/surfpool
-```
-
-### 2. Start Surfpool
-```bash
-make surfpool-start
-```
-Or manually:
-```bash
-surfpool start --no-tui
-```
-
-### 3. Run E2E Tests
-In a separate terminal:
-```bash
-RPC_URL=http://127.0.0.1:8899 cargo test rpc_e2e_ -- --ignored --nocapture
-```
-
-Or use the Makefile (starts surfpool in background, runs tests, then stops):
-```bash
+# Run tests
 make test-surfpool
 ```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT - see [LICENSE](LICENSE)
