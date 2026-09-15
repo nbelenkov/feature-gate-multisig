@@ -1337,7 +1337,7 @@ fn rpc_e2e_9_verify_checks() {
     // Smoke test the full verify command end to end: the network loop, all three
     // display sections, and (skipped, single network) cross-network consistency.
     // The assertions above cover the logic; this catches wiring/display panics.
-    verify_command(&config, Some(child_multisig.to_string()))
+    verify_command(&config, Some(child_multisig))
         .expect("verify command should run cleanly against the activated multisig");
     println!("✅ verify command ran end to end");
 
@@ -1347,7 +1347,7 @@ fn rpc_e2e_9_verify_checks() {
         networks: vec!["http://127.0.0.1:1".to_string()],
         ..config.clone()
     };
-    let error = verify_command(&unreachable, Some(child_multisig.to_string()))
+    let error = verify_command(&unreachable, Some(child_multisig))
         .expect_err("verify must fail when its checks cannot be completed");
     println!("✅ Refused with: {error}");
     assert!(
@@ -1373,9 +1373,9 @@ fn rpc_e2e_10_proposal_subcommands() {
         setup_eoa_multisig(&client, "eoa_test10", 2);
 
     let args = |voter: usize, kind: TransactionKind, index: Option<u64>| ProposalCommandArgs {
-        multisig: multisig.to_string(),
+        multisig,
         kind,
-        voting_key: Some(eoa_pubkeys[voter].to_string()),
+        voting_key: Some(eoa_pubkeys[voter]),
         keypair: Some(eoa_keypaths[voter].clone()),
         index,
     };
@@ -1584,9 +1584,9 @@ fn rpc_e2e_12_system_lookalike_is_not_actionable_as_activate() {
             &config,
             ProposalCommand::Approve,
             ProposalCommandArgs {
-                multisig: multisig.to_string(),
+                multisig,
                 kind: TransactionKind::Activate,
-                voting_key: Some(eoa_pubkeys[voter].to_string()),
+                voting_key: Some(eoa_pubkeys[voter]),
                 keypair: Some(eoa_keypaths[voter].clone()),
                 index: Some(index),
             },
@@ -1644,9 +1644,9 @@ fn rpc_e2e_13_unreadable_proposal_is_refused() {
         &config,
         ProposalCommand::Approve,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Activate,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: Some(missing_index),
         },
@@ -1681,9 +1681,9 @@ fn rpc_e2e_14_kind_mismatch_is_refused() {
         &config,
         ProposalCommand::Approve,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Revoke,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: Some(1),
         },
@@ -1713,9 +1713,9 @@ fn rpc_e2e_14_kind_mismatch_is_refused() {
         &config,
         ProposalCommand::Approve,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Activate,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: Some(1),
         },
@@ -1970,9 +1970,9 @@ fn rpc_e2e_15_multisig_body_from_another_address_is_rejected() {
         &proxied_config,
         ProposalCommand::Approve,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Activate,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: Some(1),
         },
@@ -2012,9 +2012,9 @@ fn rpc_e2e_16_transaction_from_another_index_is_rejected() {
         &config,
         ProposalCommand::Propose,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Revoke,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: None,
         },
@@ -2036,9 +2036,9 @@ fn rpc_e2e_16_transaction_from_another_index_is_rejected() {
         &proxied_config,
         ProposalCommand::Approve,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Revoke,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: Some(1),
         },
@@ -2085,9 +2085,9 @@ fn rpc_e2e_17_rekey_is_not_authorized_by_assume_yes() {
         &config,
         ProposalCommand::Propose,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Rekey,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: None,
         },
@@ -2099,9 +2099,9 @@ fn rpc_e2e_17_rekey_is_not_authorized_by_assume_yes() {
             &config,
             ProposalCommand::Approve,
             ProposalCommandArgs {
-                multisig: multisig.to_string(),
+                multisig,
                 kind: TransactionKind::Rekey,
-                voting_key: Some(eoa_pubkeys[0].to_string()),
+                voting_key: Some(eoa_pubkeys[0]),
                 keypair: Some(eoa_keypaths[0].clone()),
                 index: Some(2),
             },
@@ -2245,9 +2245,9 @@ fn rpc_e2e_18_config_change_is_not_approvable_as_a_vault_transaction() {
             &config,
             ProposalCommand::Approve,
             ProposalCommandArgs {
-                multisig: multisig.to_string(),
+                multisig,
                 kind: TransactionKind::Activate,
-                voting_key: Some(eoa_pubkeys[0].to_string()),
+                voting_key: Some(eoa_pubkeys[0]),
                 keypair: Some(eoa_keypaths[0].clone()),
                 index: Some(index),
             },
@@ -2305,9 +2305,9 @@ fn rpc_e2e_19_execute_and_listing_reads_reject_substituted_records() {
         &config,
         ProposalCommand::Propose,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind: TransactionKind::Revoke,
-            voting_key: Some(eoa_pubkeys[0].to_string()),
+            voting_key: Some(eoa_pubkeys[0]),
             keypair: Some(eoa_keypaths[0].clone()),
             index: None,
         },
@@ -2489,7 +2489,7 @@ fn rpc_e2e_20_verify_fails_on_a_non_autonomous_multisig() {
     // Every read succeeds here - the program is authentic, the feature account is
     // Fresh, the multisig is readable. The only negative is the autonomy check,
     // which previously printed a warning and exited 0.
-    let error = verify_command(&config, Some(multisig.to_string()))
+    let error = verify_command(&config, Some(multisig))
         .expect_err("verify must fail when a check reports a problem");
     println!("✅ Refused with: {error}");
     assert!(
@@ -2503,7 +2503,7 @@ fn rpc_e2e_20_verify_fails_on_a_non_autonomous_multisig() {
     // failure is the authority and not something incidental.
     let (autonomous_config, autonomous, _vault, _pubkeys, _paths) =
         setup_eoa_multisig(&client, "eoa_test20", 2);
-    verify_command(&autonomous_config, Some(autonomous.to_string()))
+    verify_command(&autonomous_config, Some(autonomous))
         .expect("an autonomous multisig must still verify cleanly");
     println!("✅ Non-autonomous multisig fails verification; autonomous one passes");
 }
@@ -2518,14 +2518,14 @@ fn rpc_e2e_21_verify_fails_when_members_differ_from_expectation() {
     let client = RpcClient::new_with_commitment(rpc_url(), CommitmentConfig::confirmed());
     let (config, multisig, _vault, _pubkeys, _paths) = setup_eoa_multisig(&client, "eoa_test21", 2);
 
-    verify_command(&config, Some(multisig.to_string()))
+    verify_command(&config, Some(multisig))
         .expect("verify should pass when the configured members match the chain");
     println!("✅ Matching member set verifies cleanly");
 
     // Swap one expected signer for a stranger: verify must fail.
     let mut tampered = config.clone();
     tampered.members[0] = Pubkey::new_unique().to_string();
-    let error = verify_command(&tampered, Some(multisig.to_string()))
+    let error = verify_command(&tampered, Some(multisig))
         .expect_err("verify must fail when the on-chain owners are not the expected ones");
     assert!(
         error
@@ -2540,7 +2540,7 @@ fn rpc_e2e_21_verify_fails_when_members_differ_from_expectation() {
         members: Vec::new(),
         ..config.clone()
     };
-    let unchecked = verify_command(&no_expectation, Some(multisig.to_string()))
+    let unchecked = verify_command(&no_expectation, Some(multisig))
         .expect_err("verify must refuse when there is no expected signer set on mainnet");
     assert!(
         unchecked

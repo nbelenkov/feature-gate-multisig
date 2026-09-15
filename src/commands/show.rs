@@ -25,35 +25,25 @@ use inquire::Select;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
 use std::io::IsTerminal;
-use std::str::FromStr;
 use tabled::{settings::Style, Table, Tabled};
 
 pub fn show_command(
     config: &Config,
-    address: Option<String>,
+    address: Option<Pubkey>,
     network: Option<String>,
     detail_index: Option<u64>,
 ) -> Result<()> {
-    let address = if let Some(addr) = address {
-        match Pubkey::from_str(&addr) {
-            Ok(_) => addr,
-            Err(_) => {
-                println!(
-                    "{} Invalid address format: {}",
-                    "❌".bright_red(),
-                    addr.bright_red()
-                );
-                return Err(eyre::eyre!("Invalid multisig address format"));
-            }
-        }
-    } else {
-        validate_pubkey_with_retry("Enter the feature gate multisig address:")?.to_string()
+    // The address is already a key: it was parsed by the CLI value parser, or
+    // by the prompt below. Nothing downstream re-validates a string.
+    let address = match address {
+        Some(address) => address,
+        None => validate_pubkey_with_retry("Enter the feature gate multisig address:")?,
     };
     let rpc_url = match network {
         Some(arg) => resolve_network_arg(config, &arg)?,
         None => choose_network_from_config(config)?,
     };
-    show_multisig(config, &address, &rpc_url, detail_index)
+    show_multisig(config, address, &rpc_url, detail_index)
 }
 
 /// The newest proposal indices a listing walks, capped. `transaction_index` is
@@ -71,12 +61,10 @@ fn listed_indices(transaction_index: u64) -> Vec<u64> {
 
 fn show_multisig(
     config: &Config,
-    address: &str,
+    multisig_pubkey: Pubkey,
     rpc_url: &str,
     detail_index: Option<u64>,
 ) -> Result<()> {
-    let multisig_pubkey =
-        Pubkey::from_str(address).map_err(|_| eyre::eyre!("Invalid multisig address format"))?;
     let rpc_client = create_rpc_client(rpc_url);
     // fetch_squads_multisig validates owner == Squads program before deserializing,
     // so a spoofed look-alike account is rejected rather than rendered as a multisig.

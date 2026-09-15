@@ -817,19 +817,20 @@ fn url_host(url: &str) -> Option<&str> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // `\` ends the authority too: for http(s) the URL parser the client uses
+    // treats it as `/`, so `http://evil.example\@localhost` connects to
+    // evil.example. Reading past it here would name the wrong host.
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
     // `user:pass@host`: the host is what the client actually connects to, so a
     // look-alike parked in the userinfo must not be read as the destination.
     let host = match authority.rsplit_once('@') {
         Some((_, host)) => host,
         None => authority,
     };
-    // Strip the port, keeping bracketed IPv6 literals intact.
+    // Strip the port, keeping bracketed IPv6 literals intact. An unclosed
+    // bracket is not a host at all.
     let host = match host.strip_prefix('[') {
-        Some(rest) => match rest.split_once(']') {
-            Some((inner, _)) => inner,
-            None => rest,
-        },
+        Some(rest) => rest.split_once(']')?.0,
         None => host.split(':').next().unwrap_or(""),
     };
     let host = host.trim_end_matches('.');
@@ -838,6 +839,19 @@ fn url_host(url: &str) -> Option<&str> {
     } else {
         Some(host)
     }
+}
+
+/// Whether a host (as returned by [`url_host`]) addresses this machine. This
+/// gates plain HTTP, so it is strict: the literal name `localhost`, or an IP
+/// literal in the loopback range. A prefix match such as `127.` would accept
+/// `127.0.0.1.example.net`, and `*.localhost` is not loopback on every resolver.
+fn is_loopback_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 /// Whether the URL looks like a Solana RPC endpoint. The check is on the parsed
@@ -849,14 +863,10 @@ fn looks_like_solana_rpc(url: &str) -> bool {
     let Some(host) = url_host(url) else {
         return false;
     };
+    if is_loopback_host(host) {
+        return true;
+    }
     let host = host.to_ascii_lowercase();
-
-    if host == "localhost" || host.ends_with(".localhost") {
-        return true;
-    }
-    if host.starts_with("127.") || host == "::1" {
-        return true;
-    }
     if host == "solana.com" || host.ends_with(".solana.com") {
         return true;
     }
@@ -865,22 +875,17 @@ fn looks_like_solana_rpc(url: &str) -> bool {
     host.split('.').any(|label| label.contains("rpc"))
 }
 
+/// Interactive RPC URL validation: the same structural rules as the CLI
+/// ([`check_rpc_url`]), then a confirmation when the host does not look like a
+/// Solana RPC provider. Both entry points refuse the same URLs; only the
+/// "unusual host" step differs, because a prompt is available here.
 pub fn validate_rpc_url(url: &str) -> Result<String> {
     let url = url.trim();
 
     if url.is_empty() {
         return Err(eyre::eyre!("URL cannot be empty"));
     }
-
-    // Check if it's a valid URL
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(eyre::eyre!("URL must start with http:// or https://"));
-    }
-
-    // Basic URL validation - check for valid characters and structure
-    if !url.contains("://") {
-        return Err(eyre::eyre!("Invalid URL format"));
-    }
+    check_rpc_url(url).map_err(|e| eyre::eyre!(e))?;
 
     // Check for common Solana RPC patterns
     if !looks_like_solana_rpc(url) {
@@ -1169,6 +1174,57 @@ pub fn check_fee_payer_balance_on_networks(
     Ok(())
 }
 
+/// clap value parser for a public key argument. Parsing at the argument
+/// boundary means a command can never receive an address it forgot to check,
+/// and a typo is reported before any network call or prompt happens.
+pub fn parse_pubkey_arg(input: &str) -> std::result::Result<Pubkey, String> {
+    let input = input.trim();
+    Pubkey::from_str(input).map_err(|_| format!("'{input}' is not a valid base58-encoded address"))
+}
+
+/// clap value parser for `--network`: either the name of a configured network
+/// or an RPC URL. Names are resolved against the config later
+/// (`resolve_network_arg`); URLs are checked here, so a mistyped endpoint is
+/// rejected at the source rather than dialled.
+pub fn parse_network_arg(input: &str) -> std::result::Result<String, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("network cannot be empty".to_string());
+    }
+    if input.contains("://") {
+        check_rpc_url(input)?;
+    } else if input.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "'{input}' is not a network name or an RPC URL (URLs must start with https://)"
+        ));
+    }
+    Ok(input.to_string())
+}
+
+/// Structural RPC URL check, shared by the CLI value parser and the interactive
+/// validator. Plain HTTP is refused off the loopback interface: a governance
+/// action must not be sent, nor its reply trusted, over a connection anything
+/// on the path can rewrite. Returns a plain `String` error so clap can print it.
+pub fn check_rpc_url(url: &str) -> std::result::Result<(), String> {
+    if url.chars().any(char::is_whitespace) {
+        return Err(format!("RPC URL '{url}' contains whitespace"));
+    }
+    let is_https = url.starts_with("https://");
+    let is_http = url.starts_with("http://");
+    if !is_https && !is_http {
+        return Err(format!("RPC URL '{url}' must start with https://"));
+    }
+    let Some(host) = url_host(url) else {
+        return Err(format!("RPC URL '{url}' has no host"));
+    };
+    if is_http && !is_loopback_host(host) {
+        return Err(format!(
+            "RPC URL '{url}' uses plain HTTP; use https:// (http:// is allowed only for localhost)"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1350,6 +1406,98 @@ mod tests {
         );
         assert_eq!(url_host("https://"), None);
         assert_eq!(url_host("api.devnet.solana.com"), None);
+    }
+
+    /// Sanitizing at the argument boundary: a mistyped address or endpoint is
+    /// rejected before the command runs, not by whichever call site remembered
+    /// to check.
+    #[test]
+    fn pubkey_args_are_parsed_at_the_boundary() {
+        let key = Pubkey::new_unique();
+        assert_eq!(parse_pubkey_arg(&format!("  {key} ")).unwrap(), key);
+
+        let err = parse_pubkey_arg("not-a-key").unwrap_err();
+        assert!(err.contains("base58"), "got: {err}");
+    }
+
+    #[test]
+    fn network_args_accept_names_and_https_urls() {
+        assert_eq!(parse_network_arg(" devnet ").unwrap(), "devnet");
+        assert_eq!(
+            parse_network_arg("https://api.devnet.solana.com").unwrap(),
+            "https://api.devnet.solana.com"
+        );
+        // Loopback endpoints are how local validators are reached.
+        assert_eq!(
+            parse_network_arg("http://127.0.0.1:8899").unwrap(),
+            "http://127.0.0.1:8899"
+        );
+        assert_eq!(
+            parse_network_arg("http://[::1]:8899").unwrap(),
+            "http://[::1]:8899"
+        );
+
+        for bad in [
+            "",
+            "http://soolana.com/mainnet",
+            "ws://api.devnet.solana.com",
+            "https://",
+            "my network",
+            // Only the loopback carve-out may be plain HTTP.
+            "http://[2001:db8::1]:8899",
+            "http://10.0.0.5:8899",
+            "http://localhost.example.net",
+        ] {
+            assert!(parse_network_arg(bad).is_err(), "should be rejected: {bad}");
+        }
+    }
+
+    /// One host parser serves both the CLI check and the interactive validator,
+    /// so userinfo and ports are handled the same way in each.
+    #[test]
+    fn rpc_url_check_reads_the_parsed_host() {
+        for ok in [
+            "http://user:pw@127.0.0.1:8899/",
+            "http://127.0.0.1:8899",
+            "http://127.255.255.254:8899",
+            "http://[::1]:8899",
+            "http://LOCALHOST:8899",
+            "https://api.devnet.solana.com",
+        ] {
+            check_rpc_url(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+
+        // Plain HTTP to anything that is not this machine, however it is dressed.
+        for bad in [
+            // The loopback name is in the userinfo; the real host is not local.
+            "http://localhost@example.net:8899",
+            // A backslash ends the authority for the client's URL parser, so
+            // this connects to evil.example, not localhost.
+            "http://evil.example\\@localhost:8899",
+            // Loopback as a prefix of a remote name.
+            "http://127.0.0.1.example.net:8899",
+            "http://127.example.net",
+            // Not loopback ranges.
+            "http://0.0.0.0:8899",
+            "http://[::ffff:127.0.0.1]:8899",
+            // A subdomain of localhost is not loopback on every resolver.
+            "http://validator.localhost:8899",
+        ] {
+            let err = check_rpc_url(bad).unwrap_err();
+            assert!(err.contains("plain HTTP"), "{bad}: {err}");
+        }
+
+        for (bad, expected) in [
+            ("https://", "no host"),
+            ("https://user@", "no host"),
+            ("http://[::1:8899", "no host"),
+            ("ws://api.devnet.solana.com", "must start with https://"),
+            ("HTTPS://api.devnet.solana.com", "must start with https://"),
+            ("https://api.devnet.solana.com/ rpc", "whitespace"),
+        ] {
+            let err = check_rpc_url(bad).unwrap_err();
+            assert!(err.contains(expected), "{bad}: {err}");
+        }
     }
 
     #[test]

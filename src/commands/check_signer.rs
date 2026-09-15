@@ -10,14 +10,13 @@ use crate::utils::{choose_network_from_config, load_signer, resolve_network_arg,
 use crate::verification::is_rekeyed;
 use eyre::Result;
 use solana_pubkey::Pubkey;
-use std::str::FromStr;
 
 /// Resolve `keypair_path` to a public key and, when a multisig is given, report
 /// whether that key can act on it. Signs nothing.
 pub fn check_signer_command(
     config: &Config,
     keypair_path: Option<String>,
-    multisig: Option<String>,
+    multisig: Option<Pubkey>,
     network: Option<String>,
 ) -> Result<()> {
     let path = keypair_path
@@ -43,9 +42,6 @@ pub fn check_signer_command(
         Output::hint("Pass --multisig <ADDRESS> to also check this key can act on it.");
         return Ok(());
     };
-    let multisig = Pubkey::from_str(&multisig)
-        .map_err(|_| eyre::eyre!("Invalid multisig address: {multisig}"))?;
-
     // --network keeps this scriptable; the picker is interactive-only.
     let rpc_url = match network {
         Some(arg) => resolve_network_arg(config, &arg)?,

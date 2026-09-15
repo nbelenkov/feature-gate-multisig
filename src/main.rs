@@ -28,6 +28,7 @@ use crate::utils::load_config;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colored::*;
 use eyre::Result;
+use solana_pubkey::Pubkey;
 
 #[derive(Parser)]
 #[command(name = "feature-gate-multisig-tool")]
@@ -86,10 +87,11 @@ The contributor key receives Initiate-only permissions, while additional members
         long_about = "Display detailed information about an existing multisig wallet including member permissions, threshold settings, and network deployment status."
     )]
     Show {
-        #[arg(help = "The multisig address to inspect")]
-        address: Option<String>,
+        #[arg(value_parser = crate::utils::parse_pubkey_arg, help = "The multisig address to inspect")]
+        address: Option<Pubkey>,
         #[arg(
             long,
+            value_parser = crate::utils::parse_network_arg,
             help = "Network to inspect: a configured network name (devnet/testnet/mainnet) or an RPC URL. Prompts when omitted and several networks are configured"
         )]
         network: Option<String>,
@@ -106,8 +108,8 @@ The contributor key receives Initiate-only permissions, while additional members
         long_about = "Checks, across every configured network, that the Squads program is the authentic immutable v4, reports the feature gate account's status (fresh/pending/activated) and rent-exemption, and lists the multisig owners and threshold. Read-only."
     )]
     Verify {
-        #[arg(help = "The feature gate multisig address to verify")]
-        address: Option<String>,
+        #[arg(value_parser = crate::utils::parse_pubkey_arg, help = "The feature gate multisig address to verify")]
+        address: Option<Pubkey>,
     },
     #[command(about = "Create a proposal on a feature gate multisig")]
     #[command(
@@ -167,11 +169,13 @@ The contributor key receives Initiate-only permissions, while additional members
         keypair: Option<String>,
         #[arg(
             long,
+            value_parser = crate::utils::parse_pubkey_arg,
             help = "Also check this key is a member of this multisig, and what it may do"
         )]
-        multisig: Option<String>,
+        multisig: Option<Pubkey>,
         #[arg(
             long,
+            value_parser = crate::utils::parse_network_arg,
             help = "Network to inspect: a configured network name (devnet/testnet/mainnet) or an RPC URL. Prompts when omitted and several networks are configured"
         )]
         network: Option<String>,
@@ -190,15 +194,16 @@ The contributor key receives Initiate-only permissions, while additional members
 /// Arguments shared by the proposal subcommands (propose/approve/reject/execute).
 #[derive(Args)]
 struct ProposalActionArgs {
-    #[arg(long, help = "The feature gate multisig address")]
-    multisig: String,
+    #[arg(long, value_parser = crate::utils::parse_pubkey_arg, help = "The feature gate multisig address")]
+    multisig: Pubkey,
     #[arg(long, value_enum, help = "What the proposal does")]
     kind: KindArg,
     #[arg(
         long,
+        value_parser = crate::utils::parse_pubkey_arg,
         help = "Voting key: your EOA or parent multisig (defaults to the saved config value)"
     )]
-    voting_key: Option<String>,
+    voting_key: Option<Pubkey>,
     #[arg(
         short = 'k',
         long,
@@ -207,6 +212,7 @@ struct ProposalActionArgs {
     keypair: Option<String>,
     #[arg(
         long,
+        value_parser = crate::utils::parse_network_arg,
         help = "Network to act on: a configured network name (devnet/testnet/mainnet) or an RPC URL. Prompts when omitted and several networks are configured"
     )]
     network: Option<String>,

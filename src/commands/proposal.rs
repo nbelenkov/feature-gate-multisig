@@ -38,10 +38,10 @@ pub enum ProposalCommand {
 
 /// Resolved inputs shared by every proposal subcommand.
 pub struct ProposalCommandArgs {
-    pub multisig: String,
+    pub multisig: Pubkey,
     pub kind: TransactionKind,
     /// Voting key flag; falls back to the config default, then to a prompt.
-    pub voting_key: Option<String>,
+    pub voting_key: Option<Pubkey>,
     /// Fee payer keypair path flag; falls back to the config default, then to a prompt.
     pub keypair: Option<String>,
     /// Proposal index (required for approve/reject/execute; unused for propose).
@@ -53,13 +53,12 @@ pub fn proposal_command(
     command: ProposalCommand,
     args: ProposalCommandArgs,
 ) -> Result<()> {
-    let multisig = Pubkey::from_str(&args.multisig)
-        .map_err(|_| eyre::eyre!("Invalid multisig address: {}", args.multisig))?;
+    let multisig = args.multisig;
 
     // Resolve the acting network once (persistence uses the original `config`;
     // dispatch uses a single-network clone so downstream never re-prompts).
     let rpc_url = choose_network_from_config(config)?;
-    let voting_key = resolve_voting_key(config, args.voting_key.as_deref())?;
+    let voting_key = resolve_voting_key(config, args.voting_key)?;
     let fee_payer_path = match args.keypair {
         Some(path) => path,
         None => prompt_for_fee_payer_path(config)?,
@@ -284,9 +283,9 @@ fn disclose_pending_action(
 /// Resolve the voting key: explicit flag, then the config default, then a prompt.
 /// A key obtained interactively is offered to be saved, since a signer's identity
 /// is stable across the many feature gate multisigs they act on.
-fn resolve_voting_key(config: &Config, flag: Option<&str>) -> Result<Pubkey> {
+fn resolve_voting_key(config: &Config, flag: Option<Pubkey>) -> Result<Pubkey> {
     if let Some(key) = flag {
-        return Pubkey::from_str(key).map_err(|_| eyre::eyre!("Invalid voting key: {}", key));
+        return Ok(key);
     }
     if let Some(saved) = &config.voting_key {
         let key = Pubkey::from_str(saved)

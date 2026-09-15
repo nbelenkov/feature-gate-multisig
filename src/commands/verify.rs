@@ -12,16 +12,13 @@ use crate::verification::{
 use eyre::Result;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
-use std::str::FromStr;
 
 /// Verify a feature gate multisig: the Squads program is authentic, the feature
 /// account is in the expected state, and who the owners are. Read-only, and
 /// runs across every configured network.
-pub fn verify_command(config: &Config, address: Option<String>) -> Result<()> {
+pub fn verify_command(config: &Config, address: Option<Pubkey>) -> Result<()> {
     let multisig = match address {
-        Some(addr) => {
-            Pubkey::from_str(&addr).map_err(|_| eyre::eyre!("Invalid multisig address format"))?
-        }
+        Some(address) => address,
         None => validate_pubkey_with_retry("Enter the feature gate multisig address:")?,
     };
 

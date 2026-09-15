@@ -45,16 +45,11 @@ pub fn interactive_mode() -> Result<()> {
             "Proposal Actions (Approve/Reject/Execute/Rekey/Revoke)" => {
                 handle_proposal_action(&config, &mut last_multisig)
             }
-            "Show feature gate multisig details" => {
-                Text::new("Enter the feature gate multisig address:")
-                    .prompt()
-                    .map_err(eyre::Report::from)
-                    .and_then(|address| show_command(&config, Some(address), None, None))
-            }
-            "Verify feature gate multisig" => Text::new("Enter the feature gate multisig address:")
-                .prompt()
-                .map_err(eyre::Report::from)
-                .and_then(|address| verify_command(&config, Some(address))),
+            // Both commands prompt for the address themselves, with the same
+            // retry-on-typo loop, so there is one place that turns text into a
+            // key rather than one per entry point.
+            "Show feature gate multisig details" => show_command(&config, None, None, None),
+            "Verify feature gate multisig" => verify_command(&config, None),
             "Check signer (signs nothing)" => handle_check_signer(&config, &last_multisig),
             "Show configuration" => config_command(&config),
             "Exit" => break,
@@ -97,7 +92,7 @@ fn handle_check_signer(config: &Config, last_multisig: &Option<String>) -> Resul
             break None;
         }
         match Pubkey::from_str(input) {
-            Ok(key) => break Some(key.to_string()),
+            Ok(key) => break Some(key),
             Err(_) => Output::warning("Invalid public key, please try again."),
         }
     };
@@ -208,9 +203,9 @@ fn handle_proposal_action(config: &Config, last_multisig: &mut Option<String>) -
         &network_config,
         command,
         ProposalCommandArgs {
-            multisig: multisig.to_string(),
+            multisig,
             kind,
-            voting_key: Some(voting_key.to_string()),
+            voting_key: Some(voting_key),
             keypair: None,
             index,
         },
