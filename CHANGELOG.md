@@ -5,35 +5,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-23
 
 ### Security
 
 - `E2E_TEST_MODE`, which auto-confirms every prompt including irreversible
   config changes, is now behind the `e2e-harness` cargo feature and compiled
-  out of release builds. Builds that carry it warn on every run.
-- The member-set check is no longer inert: when no `KNOWN_SIGNERS` set is
-  vendored into the build (the common case, where `verify` displayed the owners
-  unchecked and exited 0), the configured `members` list is used instead, and
-  `verify` names which expectation it checked. With no expectation at all it
-  refuses on mainnet.
-- `verify` exits non-zero for a rekeyed multisig or an unexpected member set,
-  so `verify && approve` cannot proceed past either. Both previously only
-  warned.
+  out of release builds. Builds that carry it warn on every run, whether or not
+  the variable is set.
 - Environment flags are enabled by value rather than by presence, so
   `FEATURE_GATE_MULTISIG_ASSUME_YES=false` no longer enables `--yes` behaviour.
+- RPC endpoints are checked on the parsed host instead of a substring of the
+  whole URL. A typo like `https://ssolana.com/mainnet` used to pass silently
+  because the string contained "solana.com".
+- Plain `http://` is refused unless the host is the loopback interface. A
+  governance action should not be sent, nor its reply trusted, over a
+  connection anything on the path can rewrite. Both the CLI and the interactive
+  prompt apply the same rule.
+- The member-set check is no longer inert: when no `KNOWN_SIGNERS` set is
+  vendored into the build, the configured `members` list is used instead, and
+  `verify` names which expectation it checked. With no expectation at all it
+  refuses on mainnet.
+- `rustls` 0.23.45 for RUSTSEC-2026-0285.
 
 ### Added
 
 - `check-signer`: resolve a keypair path (including `usb://ledger`) to its
-  public key and report whether it can act on a given multisig. Signs nothing,
-  so signers can confirm their setup before an activation depends on it.
+  public key and report whether it can act on a given multisig, and what it may
+  do. Signs nothing, so signers can confirm their setup before an activation
+  depends on it. Takes `--network` for scripted runs.
+- Revoke and Rekey appear in the interactive menus, rather than being reachable
+  only from the CLI.
 - `propose`, `approve`, `reject`, and `execute` print the on-chain action,
   multisig, feature gate, and network before signing; `--yes` does not
   suppress it.
 - `show`: the proposal table shows vote progress against cutoffs and how long
   ago each proposal changed state; the member count breaks out voting vs
   non-voting; time locks render with units.
+
+### Changed
+
+- Addresses and `--network` values are parsed when the command starts, so a
+  malformed one is reported before any prompt or network call rather than by
+  whichever call site happened to check it.
+- `verify` exits non-zero for a rekeyed multisig or an unexpected member set,
+  so `verify && approve` cannot proceed past either. Both previously only
+  warned.
+- A multisig rekeyed on every configured network is reported as DECOMMISSIONED
+  rather than as a failed correctness check. It is a deliberate end state, and
+  the exit code stays non-zero.
+- A rekeyed multisig's feature gate is marked permanent, since no proposal can
+  activate or revoke it again.
+- The owner check is skipped on a rekeyed multisig instead of restating the
+  rekey once per removed signer. `check-signer` warns on one too.
+- `create` refuses a duplicate member before anything is signed.
+- `show` checks owners against the configured set the same way `verify` does,
+  and gives the same hint on how to populate it.
+- A failed action in interactive mode is reported and returns to the menu. An
+  unreachable endpoint or a rejected input is a reason to retry, not to end the
+  session.
 
 ### Fixed
 
@@ -43,8 +73,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The non-interactive subcommands refuse an action the proposal's status or
   staleness cannot accept (matching the interactive picker), instead of sending
   a transaction the Squads program rejects with a raw `InvalidProposalStatus`.
+- The interactive picker stops when it cannot list proposals, instead of
+  offering an index derived from a failed read.
+- A malformed entry in the configured `members` list can no longer match the
+  rekeyed member key.
+- DECOMMISSIONED is claimed only when every configured network was read. A
+  network that did not answer holds a copy the run never saw.
 - The deployment summary reported `Requires: <threshold>/<threshold> approvals`;
   the denominator is now the number of voting members.
+- README and `docs/WORKFLOWS.md` accuracy: the revoke error name, `--kind`
+  usage, the interactive step order, and which parent-member permissions each
+  action needs.
 
 ## [0.4.0] - 2026-08-12
 
