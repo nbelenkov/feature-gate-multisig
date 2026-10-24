@@ -1,4 +1,5 @@
 use crate::constants::*;
+use crate::output::scrub;
 use crate::provision::{build_squads_transaction_message, create_rpc_client};
 use crate::squads::{Member, Permissions, TransactionMessage};
 use colored::*;
@@ -904,6 +905,14 @@ pub fn validate_rpc_url(url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+struct NetworkChoice(String);
+
+impl std::fmt::Display for NetworkChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&scrub(&self.0))
+    }
+}
+
 pub fn choose_network_from_config(config: &Config) -> Result<String> {
     let available_networks = if !config.networks.is_empty() {
         config.networks.clone()
@@ -931,10 +940,10 @@ pub fn choose_network_from_config(config: &Config) -> Result<String> {
 
     let choice = Select::new(
         "What network would you like to use for transaction generation?",
-        available_networks,
+        available_networks.into_iter().map(NetworkChoice).collect(),
     )
     .prompt()?;
-    Ok(choice.to_string())
+    Ok(choice.0)
 }
 
 pub fn choose_network_mode(config: &Config, use_saved_config: bool) -> Result<(bool, Vec<String>)> {
@@ -948,6 +957,20 @@ pub fn choose_network_mode(config: &Config, use_saved_config: bool) -> Result<(b
         return Ok((false, Vec::new()));
     }
 
+    print_saved_networks(&available_networks);
+    // Auto-confirm in E2E test mode
+    let use_saved_networks = if is_e2e_test_mode() {
+        true
+    } else {
+        Confirm::new("Use saved networks for deployment?")
+            .with_default(true)
+            .prompt()?
+    };
+
+    Ok((use_saved_networks, available_networks))
+}
+
+fn print_saved_networks(available_networks: &[String]) {
     println!();
     println!("{}", "Saved Network Configuration".bold().bright_yellow(),);
     println!();
@@ -962,19 +985,9 @@ pub fn choose_network_mode(config: &Config, use_saved_config: bool) -> Result<(b
             "    {}: {} ({})",
             format!("Network {}", i + 1).cyan(),
             network_name.bright_white(),
-            network.bright_white()
+            scrub(network).bright_white()
         );
     }
-    // Auto-confirm in E2E test mode
-    let use_saved_networks = if is_e2e_test_mode() {
-        true
-    } else {
-        Confirm::new("Use saved networks for deployment?")
-            .with_default(true)
-            .prompt()?
-    };
-
-    Ok((use_saved_networks, available_networks))
 }
 
 pub fn review_config(config: &Config) -> Result<bool> {
@@ -982,6 +995,20 @@ pub fn review_config(config: &Config) -> Result<bool> {
         return Ok(false);
     }
 
+    print_config_review(config);
+    // Auto-confirm in E2E test mode
+    let use_config = if is_e2e_test_mode() {
+        true
+    } else {
+        Confirm::new("Use these saved members and settings?")
+            .with_default(true)
+            .prompt()?
+    };
+
+    Ok(use_config)
+}
+
+fn print_config_review(config: &Config) {
     println!(
         "\n{}",
         "📋 Found existing configuration:".bright_yellow().bold()
@@ -997,7 +1024,7 @@ pub fn review_config(config: &Config) -> Result<bool> {
             println!(
                 "    {}: {}",
                 format!("Member {}", i + 1).cyan(),
-                member.bright_white()
+                scrub(member).bright_white()
             );
         }
     }
@@ -1014,7 +1041,7 @@ pub fn review_config(config: &Config) -> Result<bool> {
         println!(
             "  {}: {}",
             "Fee payer keypair".cyan(),
-            fee_payer_path.bright_green()
+            scrub(fee_payer_path).bright_green()
         );
     } else {
         println!(
@@ -1037,21 +1064,11 @@ pub fn review_config(config: &Config) -> Result<bool> {
         println!(
             "    {}: {}",
             format!("Network {}", i + 1).cyan(),
-            network.bright_white()
+            scrub(network).bright_white()
         );
     }
 
     println!();
-    // Auto-confirm in E2E test mode
-    let use_config = if is_e2e_test_mode() {
-        true
-    } else {
-        Confirm::new("Use these saved members and settings?")
-            .with_default(true)
-            .prompt()?
-    };
-
-    Ok(use_config)
 }
 
 pub fn decode_permissions(mask: u8) -> Vec<String> {
@@ -1161,7 +1178,7 @@ pub fn check_fee_payer_balance_on_networks(
                 "  {} {}: {}",
                 "•".bright_yellow(),
                 network.bright_white(),
-                error
+                scrub(error)
             );
         }
         println!();
@@ -1228,6 +1245,57 @@ pub fn check_rpc_url(url: &str) -> std::result::Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_choice_scrubs_display_but_preserves_url() {
+        let url = "http://localhost/?\u{1b}[2K\rspoofed-network";
+        let choice = NetworkChoice(url.to_string());
+        assert_eq!(choice.to_string(), "http://localhost/?�[2K�spoofed-network");
+        assert_eq!(choice.0, url);
+        let ordinary = "https://api.devnet.solana.com";
+        assert_eq!(NetworkChoice(ordinary.to_string()).to_string(), ordinary);
+    }
+
+    #[test]
+    fn saved_configuration_output_scrubs_controls() {
+        const CHILD: &str = "FEATURE_GATE_TEST_PRINT_CONFIG";
+        if std::env::var_os(CHILD).is_some() {
+            let config = Config {
+                members: vec!["member\u{1b}[2K\rhidden".to_string()],
+                networks: vec!["http://localhost/?\u{1b}[2K\rspoofed-network".to_string()],
+                fee_payer_path: Some("keypair\u{8}\r.json".to_string()),
+                ..Config::default()
+            };
+            print_config_review(&config);
+            print_saved_networks(&config.networks);
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "utils::tests::saved_configuration_output_scrubs_controls",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("NO_COLOR", "1")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("E2E_TEST_MODE")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("member�[2K�hidden"), "{stdout:?}");
+        assert!(stdout.contains("keypair��.json"), "{stdout:?}");
+        assert_eq!(
+            stdout
+                .matches("http://localhost/?�[2K�spoofed-network")
+                .count(),
+            2,
+            "{stdout:?}"
+        );
+        assert!(!stdout.contains(['\u{1b}', '\u{8}']), "{stdout:?}");
+    }
 
     #[test]
     fn time_lock_rendering() {

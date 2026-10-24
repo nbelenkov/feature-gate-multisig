@@ -1,4 +1,5 @@
 use crate::constants::*;
+use crate::output::scrub;
 use crate::squads::{
     deserialize_squads_account, get_multisig_pda, get_program_config_pda, get_proposal_pda,
     get_transaction_pda, get_vault_pda, CompiledInstruction, InstructionData, Member,
@@ -483,7 +484,7 @@ pub fn create_multisig(
             .bold()
     );
     println!();
-    println!("{}: {}", "Network".cyan(), rpc_url.bright_white());
+    println!("{}: {}", "Network".cyan(), scrub(&rpc_url).bright_white());
     println!(
         "{}: {}",
         "Program ID".cyan(),
