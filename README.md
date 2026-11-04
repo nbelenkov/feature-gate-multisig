@@ -197,7 +197,7 @@ Stored in your OS config directory (for example `~/.config/feature-gate-multisig
 | `threshold` | Required signatures |
 | `members` | Saved member public keys |
 | `networks` | RPC endpoints for deployment |
-| `fee_payer_path` | Keypair path (file or `usb://ledger`) |
+| `fee_payer_path` | Keypair path (file, `usb://ledger` or `usb://keystone`) |
 | `voting_key` | Default voting identity: your own key, or a parent multisig |
 
 **Voting as yourself: `voting_key` and `fee_payer_path` must be the same key.**

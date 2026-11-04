@@ -21,8 +21,8 @@ categories = ["command-line-utilities", "cryptography::cryptocurrencies"]
 [dependencies]
 clap = { version = "=4.6.1", features = ["derive"] }
 inquire = "=0.9.4"
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.150"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 dirs = "=6.0.0"
 borsh = "=1.7.0"
 colored = "=3.1.1"
@@ -30,24 +30,25 @@ indicatif = "=0.18.6"
 eyre = "=0.6.12"
 tabled = "=0.21.0"
 
-solana-rpc-client = "=3.1.14"
-solana-rpc-client-api = "=3.1.14"
-solana-clap-v3-utils = "=3.1.14"
-# Depended on directly so hidapi stays compiled in and `usb://ledger` works;
+solana-rpc-client = "=4.4.0"
+solana-rpc-client-api = "=4.4.0"
+solana-clap-v3-utils = { version = "=4.4.0", features = ["agave-unstable-api"] }
+# Depended on directly so hidapi stays compiled in and `usb://ledger` works
+# (plus `usb://keystone` via the keystone feature);
 # mirrors solana-remote-wallet's own default features.
-solana-remote-wallet = { version = "=3.1.14", default-features = false, features = ["agave-unstable-api", "linux-static-hidraw"] }
-solana-instruction = {version = "=3.4.0", features = ["bincode"]}
-solana-pubkey = {version = "=4.2.0", features = ["borsh", "curve25519"]}
-solana-keypair = "=3.1.2"
-solana-signature = "=3.4.1"
-solana-signer = "=3.0.1"
-solana-transaction-status-client-types = "=3.1.14"
-solana-message = "=3.1.0"
-solana-transaction = {version = "=3.1.0", features = ["serde", "bincode"]}
+solana-remote-wallet = { version = "=4.4.0", default-features = false, features = ["agave-unstable-api", "linux-static-hidraw", "keystone"] }
+solana-instruction = {version = "=4.0.0", features = ["bincode"]}
+solana-pubkey = {version = "=4.4.0", features = ["borsh", "curve25519"]}
+solana-keypair = "=4.0.0"
+solana-signature = "=3.6.0"
+solana-signer = "=4.0.0"
+solana-transaction-status-client-types = "=4.4.0"
+solana-message = "=5.1.0"
+solana-transaction = {version = "=5.1.0", features = ["serde"]}
 solana-compute-budget-interface = "=3.0.0"
-solana-system-interface = {version = "=3.2.0", features = ["bincode"]}
+solana-system-interface = {version = "=3.3.0", features = ["bincode"]}
 solana-commitment-config = "=3.1.1"
-solana-hash = "=4.5.0"
+solana-hash = "=4.7.0"
 solana-sha256-hasher = "=3.1.0"
 
 [features]

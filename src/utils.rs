@@ -102,7 +102,8 @@ pub fn is_assume_yes() -> bool {
     env_flag_enabled(ASSUME_YES_ENV)
 }
 
-/// Load a signer from a CLI-style path: a keypair file or `usb://ledger`.
+/// Load a signer from a CLI-style path: a keypair file, `usb://ledger` or
+/// `usb://keystone`.
 ///
 /// `signer_from_path` is deprecated upstream pending Agave's unstable-API split,
 /// but it remains the supported way to load hardware wallets; revisit once a
