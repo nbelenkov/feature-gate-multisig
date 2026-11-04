@@ -1,7 +1,8 @@
 [package]
 name = "feature-gate-multisig-tool"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2021"
+rust-version = "1.98.1"
 license = "MIT"
 authors = [
     "nikita.belenkov@anza.xyz",
