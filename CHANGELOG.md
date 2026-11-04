@@ -5,12 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-04
 
 ### Added
 
-- Keystone hardware wallet support (`usb://keystone`). Solana crates move to
-  4.4, which needs Rust 1.98.1 or newer.
+- Keystone hardware wallet support: `usb://keystone` is accepted anywhere
+  `usb://ledger` is, including `check-signer` and as `fee_payer_path`.
+
+### Changed
+
+- The Solana crates move from 3.1 to 4.4, with `solana-message` and
+  `solana-transaction` to 5.1. This is what makes the Keystone signer
+  available. **Requires Rust 1.98.1 or newer**; cargo refuses to build on an
+  older toolchain and names the version it needs.
+- The dependency tree grows from 464 to 537 packages.
+- `deny.toml` allows CC0-1.0, which `bip39`, `bitcoin_hashes` and
+  `hex-conservative` require and the Keystone signer pulls in. Note that
+  CC0-1.0 does not grant patent rights. It also ignores RUSTSEC-2024-0436
+  (`paste`) and RUSTSEC-2024-0449 (`unsafe-libyaml`), both unmaintained-crate
+  notices rather than vulnerabilities.
+
+### Security
+
+- The upgrade moves `zstd` to 0.14.3, `zstd-safe` to 8.2.0 and `zstd-sys` to
+  2.1.2, clearing RUSTSEC-2026-0391, 0398, 0403 and 0410. `zstd` decompresses
+  RPC account data, so these were reachable; the fixes needed semver-major
+  jumps that only the upstream bump could deliver.
 
 ## [0.5.2] - 2026-10-23
 
