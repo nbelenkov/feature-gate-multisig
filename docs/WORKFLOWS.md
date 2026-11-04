@@ -135,7 +135,7 @@ Create `~/.config/feature-gate-multisig-tool/config.json`:
 | `threshold` | number | Required approvals to execute proposals |
 | `members` | string[] | Member public keys (get full permissions) |
 | `networks` | string[] | RPC endpoints for deployment |
-| `fee_payer_path` | string | Path to keypair file or `usb://ledger` |
+| `fee_payer_path` | string | Path to keypair file, `usb://ledger` or `usb://keystone` |
 
 ### View current config
 

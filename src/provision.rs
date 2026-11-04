@@ -189,6 +189,7 @@ pub fn find_multisig_for_feature_account(
                 ),
                 commitment: Some(rpc_client.commitment()),
                 max_supported_transaction_version: Some(0),
+                min_context_slot: None,
             },
         ) else {
             continue;

@@ -9,6 +9,8 @@ ignore = [
   "RUSTSEC-2024-0375", # atty
   "RUSTSEC-2025-0141", # bincode
   "RUSTSEC-2026-0173", # proc-macro-error2 (unmaintained fork, no safe upgrade)
+  "RUSTSEC-2024-0436", # paste (via ur-registry, keystone)
+  "RUSTSEC-2024-0449", # unsafe-libyaml (via solana-cli-config)
 ]
 
 [licenses]
@@ -21,7 +23,9 @@ allow = [
   "BSD-1-Clause",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  "BlueOak-1.0.0",
   "BSL-1.0",
+  "CC0-1.0",
   "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
