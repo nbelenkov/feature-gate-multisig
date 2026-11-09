@@ -1,5 +1,5 @@
 use crate::commands::TransactionKind;
-use crate::output::Output;
+use crate::output::{scrub, Output};
 use crate::provision::{
     create_feature_gate_transaction_message, create_multisig, create_rpc_client,
     create_transaction_and_proposal_message,
@@ -206,8 +206,8 @@ fn deploy_to_saved_networks(
                 println!(
                     "{} Failed to deploy on {}: {}",
                     "❌".bright_red(),
-                    rpc_url.bright_white(),
-                    e.to_string().red()
+                    scrub(rpc_url).bright_white(),
+                    scrub(&e.to_string()).red()
                 );
                 failed.push(rpc_url.clone());
             }
@@ -263,8 +263,8 @@ fn deploy_to_manual_networks(
                 println!(
                     "{} Failed to deploy on {}: {}",
                     "❌".bright_red(),
-                    rpc_url.bright_white(),
-                    e.to_string().red()
+                    scrub(&rpc_url).bright_white(),
+                    scrub(&e.to_string()).red()
                 );
             }
         }
@@ -311,7 +311,7 @@ fn print_deployment_summary(
             "  {} {} ({})",
             "✓".bright_green(),
             get_network_display(&d.rpc_url).bright_white(),
-            d.rpc_url
+            scrub(&d.rpc_url)
         );
     }
 
