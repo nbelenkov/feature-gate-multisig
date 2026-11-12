@@ -20,16 +20,16 @@ categories = ["command-line-utilities", "cryptography::cryptocurrencies"]
 # transactions, so versions must only move through reviewed bumps, never through
 # an incidental `cargo update` or a fresh unlocked resolution.
 [dependencies]
-clap = { version = "=4.6.1", features = ["derive"] }
+clap = { version = "=4.6.7", features = ["derive"] }
 inquire = "=0.9.4"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
-dirs = "=6.0.0"
-borsh = "=1.7.0"
+dirs = "=7.0.0"
+borsh = "=1.8.1"
 colored = "=3.1.1"
 indicatif = "=0.18.6"
-eyre = "=0.6.12"
-tabled = "=0.21.0"
+eyre = "=0.6.14"
+tabled = "=0.22.0"
 
 solana-rpc-client = "=4.4.0"
 solana-rpc-client-api = "=4.4.0"
@@ -40,13 +40,13 @@ solana-clap-v3-utils = { version = "=4.4.0", features = ["agave-unstable-api"] }
 solana-remote-wallet = { version = "=4.4.0", default-features = false, features = ["agave-unstable-api", "linux-static-hidraw", "keystone"] }
 solana-instruction = {version = "=4.0.0", features = ["bincode"]}
 solana-pubkey = {version = "=4.4.0", features = ["borsh", "curve25519"]}
-solana-keypair = "=4.0.0"
+solana-keypair = "=4.0.1"
 solana-signature = "=3.6.0"
 solana-signer = "=4.0.0"
 solana-transaction-status-client-types = "=4.4.0"
-solana-message = "=5.1.0"
-solana-transaction = {version = "=5.1.0", features = ["serde"]}
-solana-compute-budget-interface = "=3.0.0"
+solana-message = "=6.0.0"
+solana-transaction = {version = "=6.0.0", features = ["serde"]}
+solana-compute-budget-interface = "=3.1.0"
 solana-system-interface = {version = "=3.3.0", features = ["bincode"]}
 solana-commitment-config = "=3.1.1"
 solana-hash = "=4.7.0"
