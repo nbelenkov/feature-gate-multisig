@@ -6,7 +6,6 @@ version = 2
 # this layer without an upstream Solana dependency bump. Reviewed and accepted;
 # revisit and drop entries as Solana updates its tree.
 ignore = [
-  "RUSTSEC-2024-0375", # atty
   "RUSTSEC-2025-0141", # bincode
   "RUSTSEC-2026-0173", # proc-macro-error2 (unmaintained fork, no safe upgrade)
   "RUSTSEC-2024-0436", # paste (via ur-registry, keystone)
